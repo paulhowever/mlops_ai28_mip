@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+build/
+dist/
+
+# Виртуальное окружение
+.venv/
+
+# Секреты и локальная настройка окружения
+.env
+
+# Кэши инструментов
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Отчёты о покрытии
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Логи
+*.log
