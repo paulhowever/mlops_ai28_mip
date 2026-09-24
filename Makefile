@@ -34,3 +34,6 @@ release:
 	git commit -m "chore: релиз $(VERSION)"
 	git tag -a v$(VERSION) -m "v$(VERSION)"
 	git push --follow-tags
+
+test:
+	uv run pytest --cov --cov-report=term-missing
