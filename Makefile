@@ -29,8 +29,7 @@ logs:
 
 release:
 	@test -n "$(VERSION)" || { echo "использование: make release VERSION=1.2.3"; exit 1; }
-	@python3 -c "import pathlib, re; p = pathlib.Path('pyproject.toml'); p.write_text(re.sub(r'^version = \".*\"$$', 'version = \"$(VERSION)\"', p.read_text(), count=1, flags=re.M))"
-	uv lock
+	uv version $(VERSION)
 	git add pyproject.toml uv.lock
 	git commit -m "chore: релиз $(VERSION)"
 	git tag -a v$(VERSION) -m "v$(VERSION)"
