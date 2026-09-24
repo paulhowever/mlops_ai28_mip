@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
 from dota_winprob import __version__
 from dota_winprob.api import health, version
@@ -15,7 +16,6 @@ from dota_winprob.logging_config import REQUEST_ID, setup_logging
 log = logging.getLogger(__name__)
 
 REQUEST_ID_HEADER = "X-Request-ID"
-LIVENESS_PATH = "/healthz"
 
 
 @asynccontextmanager
@@ -32,6 +32,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.info("Приложение остановлено")
 
 
+async def _call_next_or_500(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    try:
+        return await call_next(request)
+    except Exception:
+        log.exception("Необработанное исключение")
+        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+
+
 async def request_context(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -40,9 +51,9 @@ async def request_context(
     token = REQUEST_ID.set(request_id)
     started = time.perf_counter()
     try:
-        response = await call_next(request)
+        response = await _call_next_or_500(request, call_next)
         response.headers[REQUEST_ID_HEADER] = request_id
-        level = logging.DEBUG if request.url.path == LIVENESS_PATH else logging.INFO
+        level = logging.DEBUG if request.url.path == health.LIVENESS_PATH else logging.INFO
         log.log(
             level,
             "Запрос обработан",

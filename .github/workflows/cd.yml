@@ -105,9 +105,13 @@ jobs:
         if: always()
         run: docker rm -f smoke || true
 
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   publish:
     name: Публикация в GHCR
-    needs: [version-guard, smoke]
+    needs: [version-guard, smoke, ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

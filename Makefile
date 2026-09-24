@@ -1,7 +1,10 @@
-.PHONY: install lint fmt run up down logs release
+.PHONY: install hooks lint fmt run up down logs release
 
 install:
 	uv sync
+
+hooks:
+	uv run pre-commit install
 
 lint:
 	uv run ruff check .

@@ -9,12 +9,14 @@ from dota_winprob.services.health import Probe, build_report, has_critical_failu
 
 log = logging.getLogger(__name__)
 
+LIVENESS_PATH = "/healthz"
+
 router = APIRouter(tags=["health"])
 v1_router = APIRouter(prefix="/api/v1", tags=["health"])
 
 
 @router.get(
-    "/healthz",
+    LIVENESS_PATH,
     response_model=LivenessResponse,
     summary="Liveness-проба",
     description="Быстрая проверка, что процесс жив. Внешних вызовов не делает.",

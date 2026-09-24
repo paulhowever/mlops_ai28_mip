@@ -35,8 +35,10 @@ async def _run_timed(
 def _describe_failure(error: BaseException, probe_timeout: float) -> str:
     if isinstance(error, TimeoutError):
         return f"превышен таймаут {probe_timeout} с"
-    reason = str(error).splitlines()[0] if str(error) else error.__class__.__name__
-    return f"{type(error).__name__}: {reason}"
+    message = str(error)
+    if not message:
+        return type(error).__name__
+    return f"{type(error).__name__}: {message.splitlines()[0]}"
 
 
 async def build_report(probes: list[Probe], probe_timeout: float) -> HealthReport:
