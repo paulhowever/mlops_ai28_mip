@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -18,6 +19,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
+  TESTED_TAG: tested
 
 jobs:
   version-guard:
@@ -48,21 +50,32 @@ jobs:
       - id: stamp
         run: echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - name: Собрать образ в локальный демон
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Собрать образ — единственная сборка за пайплайн
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          load: true
-          tags: dota-winprob:smoke
+          outputs: type=docker,dest=/tmp/image.tar
+          tags: ${{ env.IMAGE }}:${{ env.TESTED_TAG }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILT_AT=${{ steps.stamp.outputs.built_at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Загрузить образ в локальный демон
+        run: docker load -i /tmp/image.tar
+
       - name: Поднять контейнер
-        run: docker run -d --name smoke -p 8000:8000 dota-winprob:smoke
+        run: docker run -d --name smoke -p 8000:8000 ${{ env.IMAGE }}:${{ env.TESTED_TAG }}
 
       - name: Дождаться статуса healthy
         run: |
@@ -81,10 +94,12 @@ jobs:
           echo "$body"
           [ "$(echo "$body" | jq -r .status)" = "ok" ]
 
-      - name: Проверить, что /api/v1/version отдаёт git_sha сборки
+      - name: Проверить метаданные в /api/v1/version
         run: |
+          declared="$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
           body="$(curl -fsS http://127.0.0.1:8000/api/v1/version)"
           echo "$body"
+          [ "$(echo "$body" | jq -r .version)" = "$declared" ]
           [ "$(echo "$body" | jq -r .git_sha)" = "${{ github.sha }}" ]
           [ "$(echo "$body" | jq -r .built_at)" = "${{ steps.stamp.outputs.built_at }}" ]
 
@@ -105,27 +120,39 @@ jobs:
         if: always()
         run: docker rm -f smoke || true
 
+      - name: Передать проверенный образ в publish
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-image
+          path: /tmp/image.tar
+          retention-days: 1
+          compression-level: 0
+
   ci:
     name: CI
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/ci.yml
 
   publish:
     name: Публикация в GHCR
     needs: [version-guard, smoke, ci]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
-
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: stamp
-        run: echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-image
+          path: /tmp
+
+      - name: Загрузить проверенный образ
+        run: docker load -i /tmp/image.tar
 
       - id: meta
         uses: docker/metadata-action@v5
@@ -136,27 +163,26 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=sha,prefix=sha-,format=short
+            type=sha,prefix=sha-,format=short,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
           flavor: latest=auto
 
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-            BUILT_AT=${{ steps.stamp.outputs.built_at }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - id: push
+        name: Проставить теги и запушить
+        run: |
+          : > /tmp/push.log
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker tag "${IMAGE}:${TESTED_TAG}" "$tag"
+            docker push "$tag" | tee -a /tmp/push.log
+          done <<< "${{ steps.meta.outputs.tags }}"
+          digest="$(grep -o 'sha256:[0-9a-f]\{64\}' /tmp/push.log | tail -1)"
+          [ -n "$digest" ] || { echo "::error::не удалось определить digest"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
       - name: Итог публикации
@@ -164,7 +190,9 @@ jobs:
           {
             echo "### Образ опубликован"
             echo
-            echo "**Digest:** \`${{ steps.build.outputs.digest }}\`"
+            echo "**Digest:** \`${{ steps.push.outputs.digest }}\`"
+            echo
+            echo "Опубликован ровно тот образ, который прошёл smoke-тест — без пересборки."
             echo
             echo "**Теги:**"
             echo '${{ steps.meta.outputs.tags }}' | while read -r tag; do
