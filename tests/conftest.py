@@ -1,4 +1,3 @@
-from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 
 import httpx
@@ -9,12 +8,9 @@ from dota_winprob.app import create_app
 from dota_winprob.clients import opendota, postgres
 from dota_winprob.config import Settings
 
-OpenDotaHandler = Callable[[httpx.Request], httpx.Response]
-ClientFactory = Callable[..., Awaitable[httpx.AsyncClient]]
-
 
 @pytest.fixture
-def settings() -> Settings:
+def settings():
     return Settings(
         _env_file=None,
         environment="test",
@@ -28,17 +24,14 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-async def make_client(
-    monkeypatch: pytest.MonkeyPatch,
-    settings: Settings,
-) -> AsyncIterator[ClientFactory]:
+async def make_client(monkeypatch, settings):
     async with AsyncExitStack() as stack:
 
-        async def factory(*, pool: object, opendota_handler: OpenDotaHandler) -> httpx.AsyncClient:
-            async def fake_create_pool(_: Settings) -> object:
+        async def factory(*, pool, opendota_handler):
+            async def fake_create_pool(_):
                 return pool
 
-            def fake_create_client(settings: Settings) -> httpx.AsyncClient:
+            def fake_create_client(settings):
                 return httpx.AsyncClient(
                     base_url=settings.opendota_base_url,
                     transport=httpx.MockTransport(opendota_handler),

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 
@@ -34,5 +35,13 @@ def parse_version(banner: str) -> str:
 
 
 async def fetch_version(pool: asyncpg.Pool) -> str:
-    banner = await pool.fetchval("SELECT version()")
+    connection = await pool.acquire()
+    try:
+        banner = await connection.fetchval("SELECT version()")
+    except (asyncio.CancelledError, TimeoutError):
+        # Без обрыва release ждёт, пока зависший сервер подтвердит отмену запроса, и таймаут пробы не срабатывает.
+        connection.terminate()
+        raise
+    finally:
+        await pool.release(connection)
     return parse_version(str(banner))

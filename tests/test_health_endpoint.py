@@ -56,7 +56,8 @@ async def test_opendota_down_keeps_200(make_client):
 
 
 async def test_hanging_probe_is_cut_by_timeout(make_client, settings):
-    client = await make_client(pool=HangingPool(), opendota_handler=opendota_ok)
+    pool = HangingPool()
+    client = await make_client(pool=pool, opendota_handler=opendota_ok)
 
     async with asyncio.timeout(settings.health_probe_timeout * 10):
         response = await client.get("/api/v1/health")
@@ -65,3 +66,4 @@ async def test_hanging_probe_is_cut_by_timeout(make_client, settings):
     postgres = response.json()["components"]["postgres"]
     assert postgres["detail"] == f"превышен таймаут {settings.health_probe_timeout} с"
     assert postgres["latency_ms"] >= settings.health_probe_timeout * 1000
+    assert pool.terminated

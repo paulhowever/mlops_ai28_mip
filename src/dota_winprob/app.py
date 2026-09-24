@@ -16,7 +16,6 @@ from dota_winprob.logging_config import REQUEST_ID, setup_logging
 log = logging.getLogger(__name__)
 
 REQUEST_ID_HEADER = "X-Request-ID"
-LIVENESS_PATH = "/healthz"
 
 
 @asynccontextmanager
@@ -54,7 +53,7 @@ async def request_context(
     try:
         response = await _call_next_or_500(request, call_next)
         response.headers[REQUEST_ID_HEADER] = request_id
-        level = logging.DEBUG if request.url.path == LIVENESS_PATH else logging.INFO
+        level = logging.DEBUG if request.url.path == health.LIVENESS_PATH else logging.INFO
         log.log(
             level,
             "Запрос обработан",

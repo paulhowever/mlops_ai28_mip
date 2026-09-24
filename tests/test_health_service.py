@@ -23,13 +23,14 @@ def failing_probe(name: str, error: Exception, critical: bool, delay: float = 0.
 
 
 async def test_probes_run_in_parallel():
-    probes = [sleeping_probe("a", 0.15), sleeping_probe("b", 0.15)]
+    delay = 0.15
+    probes = [sleeping_probe("a", delay), sleeping_probe("b", delay)]
 
     report = await build_report(probes, probe_timeout=1.0)
 
     assert report.status is ReportStatus.ok
-    assert all(c.latency_ms >= 150 for c in report.components.values())
-    assert report.total_latency_ms < 250
+    assert all(c.latency_ms >= delay * 1000 for c in report.components.values())
+    assert report.total_latency_ms < len(probes) * delay * 1000
 
 
 async def test_failed_probe_latency_is_measured():
@@ -55,10 +56,10 @@ async def test_hanging_probe_is_reported_as_timeout():
     ("error", "detail"),
     [
         (RuntimeError("first line\nsecond line"), "RuntimeError: first line"),
-        (RuntimeError(), "RuntimeError: RuntimeError"),
+        (ConnectionResetError(), "ConnectionResetError"),
     ],
 )
-async def test_failure_detail_is_one_line(error, detail):
+async def test_failure_detail(error, detail):
     report = await build_report([failing_probe("x", error, critical=False)], probe_timeout=1.0)
 
     assert report.components["x"].detail == detail

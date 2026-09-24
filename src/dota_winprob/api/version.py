@@ -1,12 +1,8 @@
-import logging
-
 from fastapi import APIRouter, Request
 
 from dota_winprob import __version__
 from dota_winprob.config import Settings
 from dota_winprob.schemas import VersionResponse
-
-log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["service"])
 
