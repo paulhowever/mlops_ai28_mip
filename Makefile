@@ -1,7 +1,10 @@
-.PHONY: install hooks lint fmt run up down logs release
+.PHONY: install ml-install hooks lint fmt run up down logs release data eda
 
 install:
 	uv sync
+
+ml-install:
+	uv sync --group ml
 
 hooks:
 	uv run pre-commit install
@@ -37,3 +40,12 @@ release:
 
 test:
 	uv run pytest --cov --cov-report=term-missing
+
+data:
+	mkdir -p data/raw
+	uv run --group ml kaggle datasets download devinanzelmo/dota-2-matches -f match.csv -p data/raw
+	uv run --group ml kaggle datasets download devinanzelmo/dota-2-matches -f player_time.csv -p data/raw
+	cd data/raw && for z in *.zip; do unzip -o -q "$$z" && rm -f "$$z"; done
+
+eda:
+	uv run --group ml python -m ml.eda

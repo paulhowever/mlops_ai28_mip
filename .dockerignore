@@ -12,6 +12,10 @@ dist/
 .env
 .env.example
 
+data/
+ml/
+docker/
+
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
