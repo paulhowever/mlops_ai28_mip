@@ -3,6 +3,7 @@ from pathlib import Path
 
 import mlflow
 import pandas as pd
+from mlflow.data.pandas_dataset import PandasDataset
 
 RAW_DIR = Path(os.environ.get("DATA_RAW_DIR", "data/raw"))
 MATCH_FILE = RAW_DIR / "match.csv"
@@ -88,7 +89,7 @@ def build_dataset(minute: int = DEFAULT_MINUTE) -> pd.DataFrame:
     return select_minute(build_panel((minute,)), minute)
 
 
-def log_dataset(frame: pd.DataFrame, context: str, minute: int = DEFAULT_MINUTE) -> None:
+def log_dataset(frame: pd.DataFrame, context: str, minute: int = DEFAULT_MINUTE) -> PandasDataset:
     dataset = mlflow.data.from_pandas(
         frame,
         source=DATASET_SOURCE,
@@ -96,3 +97,4 @@ def log_dataset(frame: pd.DataFrame, context: str, minute: int = DEFAULT_MINUTE)
         targets=TARGET,
     )
     mlflow.log_input(dataset, context=context)
+    return dataset
