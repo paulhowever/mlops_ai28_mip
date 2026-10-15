@@ -27,6 +27,24 @@ class Settings(BaseSettings):
         description="Таймаут одной health-пробы в секундах.",
     )
 
+    mlflow_tracking_uri: str | None = Field(
+        default=None,
+        description="Адрес MLflow Tracking Server. Без него модель не загружается.",
+    )
+    model_name: str = Field(
+        default="dota-winprob",
+        description="Имя модели в MLflow Model Registry.",
+    )
+    model_alias: str = Field(
+        default="champion",
+        description="Алиас версии, которая загружается на старте.",
+    )
+    model_load_timeout: float = Field(
+        default=30.0,
+        gt=0,
+        description="Сколько секунд ждать загрузки модели на старте.",
+    )
+
     git_sha: str = "unknown"
     built_at: str = "unknown"
 

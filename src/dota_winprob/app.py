@@ -4,14 +4,17 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from dota_winprob import __version__
-from dota_winprob.api import health, version
+from dota_winprob.api import health, process, version
 from dota_winprob.clients import opendota, postgres
 from dota_winprob.config import Settings, get_settings
 from dota_winprob.logging_config import REQUEST_ID, setup_logging
+from dota_winprob.services import inference
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +26,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.db_pool = await postgres.create_pool(settings)
     app.state.opendota = opendota.create_client(settings)
+    try:
+        app.state.model = await inference.load_model(settings)
+        app.state.model_error = None
+    except inference.ModelUnavailableError as error:
+        app.state.model = None
+        app.state.model_error = str(error)
     log.info("Приложение запущено")
     try:
         yield
@@ -69,15 +78,27 @@ async def request_context(
         REQUEST_ID.reset(token)
 
 
+async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+    detail = [
+        {key: value for key, value in item.items() if key != "input"} for item in error.errors()
+    ]
+    return JSONResponse(
+        {"detail": jsonable_encoder(detail)},
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     setup_logging(settings)
     app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.middleware("http")(request_context)
+    app.add_exception_handler(RequestValidationError, validation_error)
     app.include_router(health.router)
     app.include_router(health.v1_router)
     app.include_router(version.router)
+    app.include_router(process.router)
     return app
 
 
