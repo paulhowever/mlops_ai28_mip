@@ -14,10 +14,15 @@ services:
       OPENDOTA_BASE_URL: ${OPENDOTA_BASE_URL:-https://api.opendota.com}
       HEALTH_PROBE_TIMEOUT: ${HEALTH_PROBE_TIMEOUT:-3.0}
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME:-dota-winprob}
+      MODEL_ALIAS: ${MODEL_ALIAS:-champion}
+      MODEL_LOAD_TIMEOUT: ${MODEL_LOAD_TIMEOUT:-30}
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      mlflow:
         condition: service_healthy
     networks:
       - backend

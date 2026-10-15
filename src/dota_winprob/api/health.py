@@ -2,10 +2,11 @@ import logging
 
 from fastapi import APIRouter, Request, Response, status
 
-from dota_winprob.clients import opendota, postgres
+from dota_winprob.clients import opendota, postgres, registry
 from dota_winprob.config import Settings
 from dota_winprob.schemas import HealthReport, LivenessResponse
 from dota_winprob.services.health import Probe, build_report, has_critical_failure
+from dota_winprob.services.inference import ModelUnavailableError
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ async def liveness() -> LivenessResponse:
 def _collect_probes(request: Request) -> list[Probe]:
     pool = request.app.state.db_pool
     opendota_client = request.app.state.opendota
+    model = request.app.state.model
+    model_error = request.app.state.model_error
 
     async def probe_postgres() -> str | None:
         return await postgres.fetch_version(pool)
@@ -36,6 +39,11 @@ def _collect_probes(request: Request) -> list[Probe]:
         await opendota.check_availability(opendota_client)
         return None
 
+    async def probe_model() -> str | None:
+        if model is None:
+            raise ModelUnavailableError(model_error)
+        return model.version
+
     return [
         Probe(name="postgres", critical=True, run=probe_postgres),
         Probe(
@@ -43,6 +51,12 @@ def _collect_probes(request: Request) -> list[Probe]:
             critical=False,
             run=probe_opendota,
             note=opendota.NO_VERSION_REASON,
+        ),
+        Probe(
+            name="model",
+            critical=True,
+            run=probe_model,
+            note=registry.model_uri(request.app.state.settings),
         ),
     ]
 
