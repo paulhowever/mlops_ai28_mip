@@ -1,4 +1,4 @@
-.PHONY: install ml-install hooks lint fmt run up down logs release data eda
+.PHONY: install ml-install hooks lint fmt run up down logs release data eda train
 
 install:
 	uv sync
@@ -49,3 +49,6 @@ data:
 
 eda:
 	uv run --group ml python -m ml.eda
+
+train:
+	uv run --group ml python -m ml.train
