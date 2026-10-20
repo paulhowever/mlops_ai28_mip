@@ -48,7 +48,7 @@ jobs:
       - run: uv sync --locked
 
       - name: pytest
-        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+        run: uv run pytest -m "not integration" --cov --cov-report=term-missing --cov-report=xml
 
       - name: Покрытие в summary
         if: ${{ !cancelled() }}
@@ -61,7 +61,7 @@ jobs:
           path: coverage.xml
 
   integration:
-    name: Интеграционный тест с Postgres
+    name: Интеграционные тесты с Postgres и RabbitMQ
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
