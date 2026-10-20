@@ -1,41 +1,83 @@
+import asyncio
 import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
+import asyncpg
 from fastapi import FastAPI, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from dota_winprob import __version__
-from dota_winprob.api import health, process, version
-from dota_winprob.clients import opendota, postgres
+from dota_winprob.api import health, tasks, version
+from dota_winprob.clients import broker as broker_client
+from dota_winprob.clients import opendota, postgres, tasks_repo
 from dota_winprob.config import Settings, get_settings
 from dota_winprob.logging_config import REQUEST_ID, setup_logging
-from dota_winprob.services import inference
 
 log = logging.getLogger(__name__)
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
 
+RECOVERABLE_ERRORS = (*broker_client.PUBLISH_ERRORS, OSError, asyncpg.PostgresError)
+
+
+async def keep_trying(
+    name: str,
+    action: Callable[[], Awaitable[None]],
+    interval: float,
+) -> None:
+    while True:
+        try:
+            await action()
+        except RECOVERABLE_ERRORS as error:
+            log.warning(
+                "Зависимость пока недоступна, повторю попытку",
+                extra={"component": name, "error": repr(error), "retry_in_s": interval},
+            )
+            await asyncio.sleep(interval)
+        else:
+            log.info("Зависимость готова", extra={"component": name})
+            return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.db_pool = await postgres.create_pool(settings)
+    app.state.tasks = tasks_repo.TaskRepository(app.state.db_pool)
     app.state.opendota = opendota.create_client(settings)
-    try:
-        app.state.model = await inference.load_model(settings)
-        app.state.model_error = None
-    except inference.ModelUnavailableError as error:
-        app.state.model = None
-        app.state.model_error = str(error)
+    app.state.broker = broker_client.create_broker(settings)
+    app.state.broker_ready = asyncio.Event()
+
+    async def connect_broker() -> None:
+        async with asyncio.timeout(settings.broker_reconnect_interval):
+            await broker_client.connect_and_declare(app.state.broker, settings)
+        app.state.broker_ready.set()
+
+    async def prepare_schema() -> None:
+        await tasks_repo.ensure_schema(app.state.db_pool)
+
+    background = [
+        asyncio.create_task(
+            keep_trying("rabbitmq", connect_broker, settings.broker_reconnect_interval)
+        ),
+        asyncio.create_task(
+            keep_trying("postgres", prepare_schema, settings.broker_reconnect_interval)
+        ),
+    ]
     log.info("Приложение запущено")
     try:
         yield
     finally:
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
+        await app.state.broker.stop()
         await opendota.close_client(app.state.opendota)
         await postgres.close_pool(app.state.db_pool)
         log.info("Приложение остановлено")
@@ -98,7 +140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(health.v1_router)
     app.include_router(version.router)
-    app.include_router(process.router)
+    app.include_router(tasks.router)
     return app
 
 

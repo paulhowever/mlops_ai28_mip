@@ -2,9 +2,6 @@ import asyncio
 import logging
 import time
 
-import numpy as np
-import pandas as pd
-
 from dota_winprob.clients import registry
 from dota_winprob.clients.registry import LoadedModel
 from dota_winprob.config import Settings
@@ -52,7 +49,7 @@ async def load_model(settings: Settings) -> LoadedModel:
         model = await _fetch(settings)
     except ModelUnavailableError as error:
         log.error(
-            "Модель не загружена, /process будет отвечать 503",
+            "Модель не загружена, воркер не начнёт брать задачи",
             extra={"model_uri": registry.model_uri(settings), "error": str(error)},
         )
         raise
@@ -68,9 +65,3 @@ async def load_model(settings: Settings) -> LoadedModel:
         },
     )
     return model
-
-
-async def predict(model: LoadedModel, state: MatchState) -> float:
-    frame = pd.DataFrame([state.model_dump()], columns=list(model.features))
-    output = await asyncio.to_thread(model.predictor.predict, frame)
-    return float(np.asarray(output)[0, 1])

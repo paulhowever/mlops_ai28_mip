@@ -2,11 +2,11 @@ import logging
 
 from fastapi import APIRouter, Request, Response, status
 
-from dota_winprob.clients import opendota, postgres, registry
+from dota_winprob.clients import broker as broker_client
+from dota_winprob.clients import opendota, postgres
 from dota_winprob.config import Settings
 from dota_winprob.schemas import HealthReport, LivenessResponse
 from dota_winprob.services.health import Probe, build_report, has_critical_failure
-from dota_winprob.services.inference import ModelUnavailableError
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +29,8 @@ async def liveness() -> LivenessResponse:
 def _collect_probes(request: Request) -> list[Probe]:
     pool = request.app.state.db_pool
     opendota_client = request.app.state.opendota
-    model = request.app.state.model
-    model_error = request.app.state.model_error
+    broker = request.app.state.broker
+    broker_ready = request.app.state.broker_ready
 
     async def probe_postgres() -> str | None:
         return await postgres.fetch_version(pool)
@@ -39,10 +39,12 @@ def _collect_probes(request: Request) -> list[Probe]:
         await opendota.check_availability(opendota_client)
         return None
 
-    async def probe_model() -> str | None:
-        if model is None:
-            raise ModelUnavailableError(model_error)
-        return model.version
+    async def probe_broker() -> str | None:
+        if not broker_ready.is_set():
+            raise ConnectionError("нет подключения к RabbitMQ")
+        if not await broker.ping(timeout=request.app.state.settings.health_probe_timeout):
+            raise ConnectionError("RabbitMQ не отвечает")
+        return None
 
     return [
         Probe(name="postgres", critical=True, run=probe_postgres),
@@ -53,10 +55,10 @@ def _collect_probes(request: Request) -> list[Probe]:
             note=opendota.NO_VERSION_REASON,
         ),
         Probe(
-            name="model",
+            name="rabbitmq",
             critical=True,
-            run=probe_model,
-            note=registry.model_uri(request.app.state.settings),
+            run=probe_broker,
+            note=f"очередь {broker_client.QUEUE_NAME}",
         ),
     ]
 

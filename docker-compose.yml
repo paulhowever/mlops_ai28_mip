@@ -1,28 +1,44 @@
+x-app-build: &app-build
+  context: .
+  args:
+    GIT_SHA: ${GIT_SHA:-unknown}
+    BUILT_AT: ${BUILT_AT:-unknown}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-pipeline-env: &pipeline-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-dota_winprob}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-dota}:${RABBITMQ_PASSWORD:-dota}@rabbitmq:5672/
+  QUEUE_MAX_LENGTH: ${QUEUE_MAX_LENGTH:-100}
+  DELIVERY_LIMIT: ${DELIVERY_LIMIT:-3}
+  MAX_ATTEMPTS: ${MAX_ATTEMPTS:-3}
+  RETRY_DELAY_MS: ${RETRY_DELAY_MS:-1000}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+  WORKER_PREFETCH: ${WORKER_PREFETCH:-}
+  INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-200}
+  PUBLISH_TIMEOUT: ${PUBLISH_TIMEOUT:-1.0}
+
 services:
   app:
-    build:
-      context: .
-      args:
-        GIT_SHA: ${GIT_SHA:-unknown}
-        BUILT_AT: ${BUILT_AT:-unknown}
+    build: *app-build
     image: dota-winprob:local
     restart: unless-stopped
     environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-dota_winprob}
+      <<: *pipeline-env
       OPENDOTA_BASE_URL: ${OPENDOTA_BASE_URL:-https://api.opendota.com}
       HEALTH_PROBE_TIMEOUT: ${HEALTH_PROBE_TIMEOUT:-3.0}
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      MODEL_NAME: ${MODEL_NAME:-dota-winprob}
-      MODEL_ALIAS: ${MODEL_ALIAS:-champion}
-      MODEL_LOAD_TIMEOUT: ${MODEL_LOAD_TIMEOUT:-30}
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
-      mlflow:
+      rabbitmq:
         condition: service_healthy
     networks:
       - backend
@@ -41,11 +57,100 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *logging
+
+  worker:
+    build: *app-build
+    image: dota-winprob:local
+    command: ["uvicorn", "dota_winprob.worker:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
+    restart: unless-stopped
+    environment:
+      <<: *pipeline-env
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME:-dota-winprob}
+      MODEL_ALIAS: ${MODEL_ALIAS:-champion}
+      MODEL_LOAD_TIMEOUT: ${MODEL_LOAD_TIMEOUT:-30}
+      GRACEFUL_TIMEOUT: ${GRACEFUL_TIMEOUT:-30}
+    ports:
+      - "${WORKER_PORTS:-8101-8104}:8001"
+    stop_grace_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).status == 200 else 1)
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging: *logging
+
+  source:
+    build: *app-build
+    image: dota-winprob:local
+    profiles: ["batch"]
+    command: ["python", "-m", "dota_winprob.source", "--file", "/app/data/tasks.csv"]
+    restart: "no"
+    environment:
+      <<: *pipeline-env
+      SOURCE_BACKOFF_MIN: ${SOURCE_BACKOFF_MIN:-0.02}
+      SOURCE_BACKOFF_MAX: ${SOURCE_BACKOFF_MAX:-0.5}
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    logging: *logging
+
+  rabbitmq:
+    image: rabbitmq:4.3-management
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-dota}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-dota}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: -rabbit collect_statistics_interval 1000
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    logging: *logging
 
   postgres:
     image: postgres:16-alpine
@@ -72,11 +177,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *logging
 
   minio:
     image: bitnamilegacy/minio:latest
@@ -103,11 +204,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *logging
 
   mlflow:
     build:
@@ -155,15 +252,12 @@ services:
         limits:
           cpus: "2.0"
           memory: 1G
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+    logging: *logging
 
 volumes:
   postgres-data:
   minio-data:
+  rabbitmq-data:
 
 networks:
   backend:

@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -83,14 +84,50 @@ class MatchState(BaseModel):
     lh_advantage: float = Field(description="Преимущество по добиваниям: Radiant минус Dire.")
 
 
-class ProcessResponse(BaseModel):
-    win_probability: float = Field(
+class TaskSource(StrEnum):
+    api = "api"
+    batch = "batch"
+
+
+class TaskStatus(StrEnum):
+    pending = "pending"
+    done = "done"
+    failed = "failed"
+
+
+class TaskMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    source: TaskSource
+    features: MatchState
+    published_at: datetime
+
+
+class TaskAccepted(BaseModel):
+    task_id: str = Field(description="Идентификатор задачи.")
+    status: TaskStatus = Field(description="Всегда pending: задача принята в очередь.")
+    status_url: str = Field(description="Где смотреть результат.")
+
+
+class TaskView(BaseModel):
+    task_id: str
+    source: TaskSource
+    status: TaskStatus
+    win_probability: float | None = Field(
+        default=None,
         ge=0,
         le=1,
-        description="Вероятность победы Radiant.",
+        description="Вероятность победы Radiant, когда задача выполнена.",
     )
-    model_name: str = Field(description="Имя модели в MLflow Model Registry.")
-    model_version: str = Field(
-        description="Версия из Registry, на которую указывал алиас при загрузке модели.",
+    model_version: str | None = Field(
+        default=None,
+        description="Версия модели из Registry, которая посчитала результат.",
     )
-    model_alias: str = Field(description="Алиас, по которому модель загружена на старте.")
+    error: str | None = Field(default=None, description="Причина отказа для failed.")
+    attempts: int = Field(description="Номер попытки, на которой задача завершилась.")
+    published_at: datetime | None = Field(
+        default=None,
+        description="Когда задача отправлена в брокер: время попытки публикации, которую он принял.",
+    )
+    completed_at: datetime | None = Field(default=None, description="Когда записан результат.")

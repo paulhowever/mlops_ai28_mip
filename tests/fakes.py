@@ -1,11 +1,13 @@
 import asyncio
 import threading
+from datetime import UTC, datetime
 
 import httpx
 import numpy as np
 import pandas as pd
 
 from dota_winprob.clients.registry import LoadedModel
+from dota_winprob.schemas import MatchState, TaskMessage, TaskSource, TaskView
 
 POSTGRES_BANNER = "PostgreSQL 16.4 (Debian 16.4-1.pgdg120+1) on x86_64-pc-linux-gnu"
 
@@ -116,3 +118,69 @@ def loader_for(model: LoadedModel):
 
 def mlflow_unavailable(settings) -> LoadedModel:
     raise ConnectionError("mlflow.invalid: Name or service not known")
+
+
+class FakeBroker:
+    def __init__(self, alive: bool = True) -> None:
+        self.alive = alive
+        self.stopped = False
+
+    async def ping(self, **options: object) -> bool:
+        return self.alive
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class FakePublisher:
+    def __init__(self, accept: bool = True) -> None:
+        self.accept = accept
+        self.messages: list[TaskMessage] = []
+        self.correlation_ids: list[str | None] = []
+
+    async def __call__(self, broker, message, confirm_timeout, correlation_id=None) -> bool:
+        self.messages.append(message)
+        self.correlation_ids.append(correlation_id)
+        return self.accept
+
+
+class FakeTasks:
+    def __init__(self, pool=None) -> None:
+        self.pending: list[TaskMessage] = []
+        self.results: dict[str, dict] = {}
+        self.failed: dict[str, dict] = {}
+        self.views: dict[str, TaskView] = {}
+        self.broken = False
+
+    async def insert_pending(self, message: TaskMessage) -> None:
+        if self.broken:
+            raise OSError("connection refused")
+        self.pending.append(message)
+
+    async def save_result(self, message, win_probability, model_version, attempt, worker) -> bool:
+        if self.broken:
+            raise OSError("connection refused")
+        if message.task_id in self.results:
+            return False
+        self.results[message.task_id] = {
+            "win_probability": win_probability,
+            "model_version": model_version,
+            "attempt": attempt,
+            "worker": worker,
+        }
+        return True
+
+    async def mark_failed(self, task_id, source, error, attempt, worker) -> None:
+        self.failed[task_id] = {"source": source, "error": error, "attempt": attempt}
+
+    async def fetch(self, task_id: str) -> TaskView | None:
+        return self.views.get(task_id)
+
+
+def task_message(task_id: str = "batch:1") -> TaskMessage:
+    return TaskMessage(
+        task_id=task_id,
+        source=TaskSource.batch,
+        features=MatchState.model_validate(MATCH_STATE),
+        published_at=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+    )
