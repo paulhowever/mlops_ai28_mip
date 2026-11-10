@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import sys
+import warnings
 
 import httpx
 import pytest
@@ -306,3 +307,24 @@ async def test_overload_is_warning_with_task_and_trace(make_client, capsys):
     assert warning["level"] == "WARNING"
     assert re.fullmatch(r"[0-9a-f]{32}", warning["trace_id"])
     assert warning["retry_after"] >= 1
+
+
+def test_broker_reconnect_errors_are_throttled(settings, capsys):
+    setup_logging(settings)
+    for _ in range(5):
+        logging.getLogger("aiormq.connection").error("error when creating transport: %r", "down")
+
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["logger"] == "aiormq.connection"
+
+
+def test_python_warnings_are_logged_as_json(settings, capsys):
+    logging.captureWarnings(False)
+    setup_logging(settings)
+    warnings.showwarning(RuntimeWarning("coroutine was never awaited"), RuntimeWarning, __file__, 1)
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["level"] == "WARNING"
+    assert record["logger"] == "py.warnings"
+    assert "never awaited" in record["message"]

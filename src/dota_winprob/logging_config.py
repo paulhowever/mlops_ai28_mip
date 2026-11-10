@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import Any
 
 from opentelemetry import trace
@@ -31,6 +31,7 @@ LIBRARY_LOGGERS = (
     "mlflow",
 )
 TELEMETRY_LOGGER = "opentelemetry"
+THROTTLED_LOGGERS = (TELEMETRY_LOGGER, "aiormq", "aio_pika")
 TELEMETRY_LOG_INTERVAL = 60.0
 
 _RESERVED = frozenset(
@@ -121,7 +122,7 @@ class JsonFormatter(logging.Formatter):
 class ThrottleFilter(logging.Filter):
     def __init__(
         self,
-        prefix: str,
+        prefix: str | tuple[str, ...],
         interval: float,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -154,7 +155,7 @@ def setup_logging(settings: Settings, **static: object) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter(settings, static))
     handler.setLevel(level)
-    handler.addFilter(ThrottleFilter(TELEMETRY_LOGGER, TELEMETRY_LOG_INTERVAL))
+    handler.addFilter(ThrottleFilter(THROTTLED_LOGGERS, TELEMETRY_LOG_INTERVAL))
 
     root = logging.getLogger()
     root.handlers = [handler]
@@ -167,3 +168,13 @@ def setup_logging(settings: Settings, **static: object) -> None:
 
     logging.getLogger("uvicorn.access").disabled = True
     logging.getLogger(TELEMETRY_LOGGER).setLevel(max(level, logging.WARNING))
+    logging.captureWarnings(True)
+    sys.excepthook = _log_uncaught
+
+
+def _log_uncaught(
+    kind: type[BaseException], error: BaseException, traceback: TracebackType | None
+) -> None:
+    logging.getLogger("uncaught").critical(
+        "Необработанное исключение", exc_info=(kind, error, traceback)
+    )

@@ -244,3 +244,34 @@ async def test_source_makes_one_trace_per_task_with_nack_and_backoff_events(span
     assert stats.waited == pytest.approx(
         sum(event.attributes["delay_s"] for event in first.events if event.name == "backoff")
     )
+
+
+async def test_process_span_shows_time_spent_in_queue(settings, spans):
+    worker = build_broker(settings, WorkerState(pipeline=pipeline_for(FakePredictor())))
+
+    async with TestRabbitBroker(worker) as test_broker:
+        await publish(test_broker, "batch:11")
+
+    process = one(spans.get_finished_spans(), PROCESS_SPAN)
+    assert process.attributes["task.queue_wait_s"] > 0
+
+
+class UnreachableTasks(FakeTasks):
+    async def mark_failed(self, task_id, source, error, attempt, worker) -> None:
+        raise OSError("connection refused")
+
+
+async def test_last_attempt_reaches_dlq_even_if_failed_status_is_not_saved(settings, spans):
+    pipeline = pipeline_for(FakePredictor())
+    pipeline.repository = UnreachableTasks()
+    pipeline.repository.broken = True
+    worker = build_broker(settings, WorkerState(pipeline=pipeline))
+
+    async with TestRabbitBroker(worker) as test_broker:
+        await publish(test_broker, "batch:12", attempt=3)
+
+    finished = spans.get_finished_spans()
+    process = one(finished, PROCESS_SPAN)
+    assert "dlq" in event_names(process)
+    assert process.attributes["task.dead_lettered"] is True
+    assert one(finished, "db mark_failed").status.status_code is StatusCode.ERROR

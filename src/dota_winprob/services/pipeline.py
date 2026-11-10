@@ -22,6 +22,7 @@ tracer = trace.get_tracer(__name__)
 RetryPublisher = Callable[[bytes, Mapping[str, Any], str, str | None], Awaitable[bool]]
 
 TASK_ID_ATTRIBUTE = "task.id"
+QUEUE_WAIT_ATTRIBUTE = "task.queue_wait_s"
 DB_ATTRIBUTES = {"db.system.name": "postgresql", "db.collection.name": "tasks"}
 
 
@@ -122,13 +123,14 @@ class Pipeline:
 
             bind(task_id=message.task_id)
             span.set_attribute(TASK_ID_ATTRIBUTE, message.task_id)
-            waited = (datetime.now(UTC) - message.published_at).total_seconds()
-            instruments.queue_wait.record(max(0.0, waited))
+            waited = max(0.0, (datetime.now(UTC) - message.published_at).total_seconds())
+            span.set_attribute(QUEUE_WAIT_ATTRIBUTE, round(waited, 6))
+            instruments.queue_wait.record(waited)
 
             self.in_flight += 1
             instruments.in_flight.add(1)
             try:
-                await self._process(message, body, attempt, correlation_id)
+                await self._process(message, body, attempt, correlation_id, waited)
             finally:
                 self.in_flight -= 1
                 instruments.in_flight.add(-1)
@@ -139,6 +141,7 @@ class Pipeline:
         body: bytes,
         attempt: int,
         correlation_id: str | None,
+        waited: float = 0.0,
     ) -> None:
         try:
             probability = await self.scorer.score(message.features, attempt)
@@ -169,7 +172,14 @@ class Pipeline:
         if saved:
             self.processed += 1
             instruments.worker_tasks.add(1, {"result": "ok"})
-            log.debug("Задача выполнена", extra={"win_probability": probability})
+            log.info(
+                "Задача выполнена",
+                extra={
+                    "win_probability": probability,
+                    "queue_wait_s": round(waited, 3),
+                    "model_version": self.scorer.model.version,
+                },
+            )
         else:
             self.duplicates += 1
             instruments.worker_tasks.add(1, {"result": "duplicate"})
@@ -214,8 +224,12 @@ class Pipeline:
             "db mark_failed",
             kind=trace.SpanKind.CLIENT,
             attributes={**DB_ATTRIBUTES, "db.operation.name": "mark_failed"},
-        ):
-            await self.repository.mark_failed(task_id, source, error, attempt, self.worker)
+        ) as span:
+            try:
+                await self.repository.mark_failed(task_id, source, error, attempt, self.worker)
+            except Exception as db_error:
+                _mark_error(span, db_error, attempt)
+                log.error("Статус failed не записан в БД", exc_info=db_error)
 
     async def _fail(self, message: TaskMessage, error: str, attempt: int) -> None:
         self.failed += 1

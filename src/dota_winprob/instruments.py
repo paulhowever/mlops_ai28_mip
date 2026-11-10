@@ -38,3 +38,11 @@ redeliveries = meter.create_counter(
     "pipeline.worker.redeliveries",
     description="Повторные доставки: redelivered после падения воркера, retry из очереди повторов.",
 )
+
+
+def observe_queue_limit(limit: int) -> None:
+    meter.create_observable_gauge(
+        "pipeline.queue.max_length",
+        callbacks=[lambda options: [metrics.Observation(limit)]],
+        description="Лимит x-max-length рабочей очереди из QUEUE_MAX_LENGTH.",
+    )

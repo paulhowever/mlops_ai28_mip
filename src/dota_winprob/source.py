@@ -138,6 +138,7 @@ async def publish_until_accepted(
     stats.published += 1
     instruments.source_published.add(1)
     span.set_attribute("attempts", attempt)
+    log.info("Задача опубликована", extra={"attempts": attempt})
     return True
 
 

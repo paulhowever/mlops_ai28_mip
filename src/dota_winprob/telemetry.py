@@ -16,7 +16,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from dota_winprob import __version__
+from dota_winprob import __version__, instruments
 from dota_winprob.config import Settings
 
 log = logging.getLogger(__name__)
@@ -150,6 +150,8 @@ def setup_telemetry(settings: Settings) -> Telemetry:
         trace.set_tracer_provider(tracer_provider)
         metrics.set_meter_provider(meter_provider)
         SystemMetricsInstrumentor(config=PROCESS_METRICS).instrument(meter_provider=meter_provider)
+        if settings.queue_max_length:
+            instruments.observe_queue_limit(settings.queue_max_length)
         telemetry = Telemetry(tracer_provider, meter_provider)
     _ACTIVE["process"] = telemetry
     log.info(
