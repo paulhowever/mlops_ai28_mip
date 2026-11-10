@@ -1,0 +1,182 @@
+{
+  "scenarios": [
+    {
+      "scenario": "limited",
+      "title": "Лимит очереди 100, prefetch 4",
+      "before_event": {
+        "source_rate": 17.7,
+        "throughput": 17.8,
+        "latency_p50_s": 5.15,
+        "depth_mean": 94.8
+      },
+      "after_event": {
+        "source_rate": 37.1,
+        "throughput": 37.0,
+        "latency_p50_s": 2.54,
+        "depth_mean": 91.7
+      },
+      "max_ready": 97,
+      "max_unacked": 8,
+      "max_rabbitmq_mb": 222.4,
+      "max_workers_mb": 386.1,
+      "max_source_mb": 52.8,
+      "rejected": 550,
+      "confirmed_publishes": 2512,
+      "rows_in_db": 2512,
+      "left_in_queue": 0,
+      "lost": 0
+    },
+    {
+      "scenario": "unbounded_queue",
+      "title": "Очередь без лимита, prefetch 4",
+      "before_event": {
+        "source_rate": 2148.4,
+        "throughput": 18.3,
+        "latency_p50_s": 28.35,
+        "depth_mean": 39522.2
+      },
+      "after_event": {
+        "source_rate": null,
+        "throughput": 36.6,
+        "latency_p50_s": 72.59,
+        "depth_mean": 48311.8
+      },
+      "max_ready": 49452,
+      "max_unacked": 8,
+      "max_rabbitmq_mb": 277.7,
+      "max_workers_mb": 386.4,
+      "max_source_mb": 40.0,
+      "rejected": 0,
+      "confirmed_publishes": 49948,
+      "rows_in_db": 2423,
+      "left_in_queue": 47669,
+      "lost": null
+    },
+    {
+      "scenario": "unbounded_prefetch",
+      "title": "Лимит очереди 100, prefetch без лимита",
+      "before_event": {
+        "source_rate": 18.8,
+        "throughput": 18.7,
+        "latency_p50_s": 28.39,
+        "depth_mean": 2088.2
+      },
+      "after_event": {
+        "source_rate": 38.7,
+        "throughput": 38.1,
+        "latency_p50_s": 49.56,
+        "depth_mean": 4089.9
+      },
+      "max_ready": 101,
+      "max_unacked": 4000,
+      "max_rabbitmq_mb": 255.8,
+      "max_workers_mb": 472.7,
+      "max_source_mb": 52.8,
+      "rejected": 531,
+      "confirmed_publishes": 6580,
+      "rows_in_db": 2520,
+      "left_in_queue": 4089,
+      "lost": null
+    },
+    {
+      "scenario": "sigterm",
+      "title": "Два воркера, одному SIGTERM под нагрузкой",
+      "before_event": {
+        "source_rate": 38.0,
+        "throughput": 36.6,
+        "latency_p50_s": 2.59,
+        "depth_mean": 95.3
+      },
+      "after_event": {
+        "source_rate": 19.2,
+        "throughput": 17.9,
+        "latency_p50_s": 5.24,
+        "depth_mean": 90.3
+      },
+      "max_ready": 97,
+      "max_unacked": 8,
+      "max_rabbitmq_mb": 239.5,
+      "max_workers_mb": 387.9,
+      "max_source_mb": 40.2,
+      "rejected": 361,
+      "confirmed_publishes": 1717,
+      "rows_in_db": 1717,
+      "left_in_queue": 0,
+      "lost": 0
+    }
+  ],
+  "config": [
+    {
+      "name": "limited",
+      "title": "Лимит очереди 100, prefetch 4",
+      "env": {
+        "QUEUE_MAX_LENGTH": "100",
+        "WORKER_PREFETCH": ""
+      },
+      "workers": 1,
+      "duration": 90,
+      "events": [
+        {
+          "at": 45,
+          "action": "scale",
+          "label": "второй воркер"
+        }
+      ],
+      "drain": true
+    },
+    {
+      "name": "unbounded_queue",
+      "title": "Очередь без лимита, prefetch 4",
+      "env": {
+        "QUEUE_MAX_LENGTH": "0",
+        "WORKER_PREFETCH": ""
+      },
+      "workers": 1,
+      "duration": 90,
+      "events": [
+        {
+          "at": 45,
+          "action": "scale",
+          "label": "второй воркер"
+        }
+      ],
+      "drain": false
+    },
+    {
+      "name": "unbounded_prefetch",
+      "title": "Лимит очереди 100, prefetch без лимита",
+      "env": {
+        "QUEUE_MAX_LENGTH": "100",
+        "WORKER_PREFETCH": "0"
+      },
+      "workers": 1,
+      "duration": 90,
+      "events": [
+        {
+          "at": 45,
+          "action": "scale",
+          "label": "второй воркер"
+        }
+      ],
+      "drain": false
+    },
+    {
+      "name": "sigterm",
+      "title": "Два воркера, одному SIGTERM под нагрузкой",
+      "env": {
+        "QUEUE_MAX_LENGTH": "100",
+        "WORKER_PREFETCH": ""
+      },
+      "workers": 2,
+      "duration": 60,
+      "events": [
+        {
+          "at": 30,
+          "action": "sigterm",
+          "label": "SIGTERM воркеру"
+        }
+      ],
+      "drain": true
+    }
+  ]
+}

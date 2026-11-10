@@ -1,4 +1,8 @@
-.PHONY: install ml-install hooks lint fmt run up down logs release data eda train
+.PHONY: install ml-install hooks lint fmt run up down logs release data eda train \
+	tasks-file source workers worker-logs worker-health experiment \
+	reconfigure prefetch poison kill-worker
+
+WORKERS ?= 2
 
 install:
 	uv sync
@@ -52,3 +56,45 @@ eda:
 
 train:
 	uv run --group ml python -m ml.train
+
+tasks-file:
+	uv run --group ml python -m ml.tasks_file
+
+source:
+	docker compose --profile batch run --rm source
+
+workers:
+	docker compose up -d --no-recreate --scale worker=$(WORKERS) worker
+
+worker-logs:
+	docker compose logs -f worker
+
+experiment:
+	uv run --group ml python -m experiments.run
+
+worker-health:
+	@for index in $$(seq 1 $$(docker compose ps -q worker | wc -l)); do \
+		port=$$(docker compose port --index $$index worker 8001 | cut -d: -f2); \
+		curl -s "localhost:$$port/health"; echo; \
+	done
+
+RABBITMQ_API = http://localhost:$${RABBITMQ_MANAGEMENT_PORT:-15672}/api
+RABBITMQ_AUTH = $${RABBITMQ_USER:-dota}:$${RABBITMQ_PASSWORD:-dota}
+
+reconfigure:
+	@for queue in tasks.score tasks.retry tasks.dlq; do \
+		curl -s -o /dev/null -u "$(RABBITMQ_AUTH)" -X DELETE "$(RABBITMQ_API)/queues/%2F/$$queue"; \
+	done
+	docker compose up -d --no-deps --force-recreate app worker
+
+prefetch:
+	docker compose up -d --no-deps --force-recreate worker
+
+poison:
+	curl -s -u "$(RABBITMQ_AUTH)" -X POST "$(RABBITMQ_API)/exchanges/%2F/tasks/publish" \
+		-H 'content-type: application/json' \
+		-d '{"properties": {"delivery_mode": 2}, "routing_key": "score", "payload": "not a task", "payload_encoding": "string"}'
+	@echo
+
+kill-worker:
+	docker kill $$(docker compose ps -q worker | head -1)

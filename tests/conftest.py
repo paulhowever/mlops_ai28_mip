@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import AsyncExitStack
 
 import httpx
@@ -5,7 +6,8 @@ import pytest
 from asgi_lifespan import LifespanManager
 
 from dota_winprob.app import create_app
-from dota_winprob.clients import opendota, postgres, registry
+from dota_winprob.clients import broker as broker_client
+from dota_winprob.clients import opendota, postgres, tasks_repo
 from dota_winprob.config import Settings
 from tests import fakes
 
@@ -21,6 +23,9 @@ def settings():
         health_probe_timeout=0.2,
         mlflow_tracking_uri="http://mlflow.invalid",
         model_load_timeout=0.5,
+        rabbitmq_url="amqp://guest:guest@rabbitmq.invalid:5672/",
+        broker_reconnect_interval=0.05,
+        worker_name="worker-test",
         git_sha="abc1234",
         built_at="2026-09-24T00:00:00Z",
     )
@@ -30,7 +35,16 @@ def settings():
 async def make_client(monkeypatch, settings):
     async with AsyncExitStack() as stack:
 
-        async def factory(*, pool, opendota_handler, model_loader=None):
+        async def factory(
+            *,
+            pool,
+            opendota_handler,
+            broker=None,
+            broker_connects=True,
+            publisher=None,
+            queue_load=(0, 1),
+            tasks=None,
+        ):
             async def fake_create_pool(_):
                 return pool
 
@@ -40,13 +54,32 @@ async def make_client(monkeypatch, settings):
                     transport=httpx.MockTransport(opendota_handler),
                 )
 
+            async def fake_connect(broker, settings):
+                if not broker_connects:
+                    raise ConnectionError("rabbitmq.invalid: connection refused")
+
+            async def fake_queue_load(broker):
+                return queue_load
+
+            async def fake_ensure_schema(pool):
+                return None
+
             monkeypatch.setattr(postgres, "create_pool", fake_create_pool)
             monkeypatch.setattr(opendota, "create_client", fake_create_client)
             monkeypatch.setattr(
-                registry, "load_model", model_loader or fakes.loader_for(fakes.loaded_model())
+                broker_client, "create_broker", lambda _: broker or fakes.FakeBroker()
             )
+            monkeypatch.setattr(broker_client, "connect_and_declare", fake_connect)
+            monkeypatch.setattr(broker_client, "publish_task", publisher or fakes.FakePublisher())
+            monkeypatch.setattr(broker_client, "queue_load", fake_queue_load)
+            monkeypatch.setattr(tasks_repo, "ensure_schema", fake_ensure_schema)
+            monkeypatch.setattr(tasks_repo, "TaskRepository", lambda _: tasks or fakes.FakeTasks())
 
-            manager = await stack.enter_async_context(LifespanManager(create_app(settings)))
+            application = create_app(settings)
+            manager = await stack.enter_async_context(LifespanManager(application))
+            if broker_connects:
+                async with asyncio.timeout(1):
+                    await application.state.broker_ready.wait()
             return await stack.enter_async_context(
                 httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=manager.app),
