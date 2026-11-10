@@ -7,12 +7,17 @@ from typing import Protocol
 
 import asyncpg
 from faststream.rabbit import RabbitBroker
+from opentelemetry import trace
 
 from dota_winprob.clients import broker as broker_client
 from dota_winprob.config import Settings
+from dota_winprob.logging_config import bind
 from dota_winprob.schemas import MatchState, TaskMessage, TaskSource
 
 log = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
+
+SUBMIT_SPAN = "task submit"
 
 
 class Overloaded(Exception):
@@ -50,6 +55,25 @@ async def submit(
     features: MatchState,
     correlation_id: str | None = None,
 ) -> TaskMessage:
+    with tracer.start_as_current_span(SUBMIT_SPAN, attributes={"task.source": "api"}) as span:
+        try:
+            return await _submit(
+                broker, broker_ready, repository, settings, features, correlation_id
+            )
+        except Overloaded as overload:
+            span.set_attribute("retry_after_s", overload.retry_after)
+            span.add_event("overloaded", {"reason": overload.reason})
+            raise
+
+
+async def _submit(
+    broker: RabbitBroker,
+    broker_ready: bool,
+    repository: PendingWriter,
+    settings: Settings,
+    features: MatchState,
+    correlation_id: str | None,
+) -> TaskMessage:
     if not broker_ready:
         raise Overloaded(math.ceil(settings.broker_reconnect_interval), "нет связи с брокером")
 
@@ -59,6 +83,8 @@ async def submit(
         features=features,
         published_at=datetime.now(UTC),
     )
+    bind(task_id=message.task_id)
+    trace.get_current_span().set_attribute("task.id", message.task_id)
     accepted = await broker_client.publish_task(
         broker,
         message,
@@ -73,6 +99,6 @@ async def submit(
     except (asyncpg.PostgresError, OSError, TimeoutError) as error:
         log.warning(
             "Задача в очереди, но строка pending не записана: результат запишет воркер",
-            extra={"task_id": message.task_id, "error": repr(error)},
+            extra={"error": repr(error)},
         )
     return message

@@ -5,6 +5,7 @@ from typing import Any
 from aio_pika.exceptions import AMQPError, ChannelInvalidStateError
 from faststream.exceptions import FastStreamException
 from faststream.rabbit import ExchangeType, QueueType, RabbitBroker, RabbitExchange, RabbitQueue
+from faststream.rabbit.opentelemetry import RabbitTelemetryMiddleware
 from pamqp.commands import Basic
 
 from dota_winprob.config import Settings
@@ -17,6 +18,7 @@ QUEUE_NAME = "tasks.score"
 RETRY_QUEUE_NAME = "tasks.retry"
 DEAD_LETTER_QUEUE_NAME = "tasks.dlq"
 ATTEMPT_HEADER = "x-attempt"
+ACCESS_LOGGER = "faststream.access.rabbit"
 
 TASKS_EXCHANGE = RabbitExchange("tasks", type=ExchangeType.DIRECT, durable=True)
 DEAD_LETTER_EXCHANGE = RabbitExchange("tasks.dlx", type=ExchangeType.FANOUT, durable=True)
@@ -70,7 +72,9 @@ def create_broker(settings: Settings) -> RabbitBroker:
     return RabbitBroker(
         settings.rabbitmq_url,
         graceful_timeout=settings.graceful_timeout,
+        logger=logging.getLogger(ACCESS_LOGGER),
         log_level=logging.DEBUG,
+        middlewares=(RabbitTelemetryMiddleware(),),
     )
 
 

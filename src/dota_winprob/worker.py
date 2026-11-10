@@ -15,11 +15,12 @@ from faststream.rabbit.annotations import RabbitMessage
 from dota_winprob.clients import broker as broker_client
 from dota_winprob.clients import tasks_repo
 from dota_winprob.config import Settings, get_settings
-from dota_winprob.logging_config import REQUEST_ID, setup_logging
+from dota_winprob.logging_config import REQUEST_ID, log_context, setup_logging
 from dota_winprob.services import inference
 from dota_winprob.services.loop_lag import LoopLagMonitor
 from dota_winprob.services.pipeline import Pipeline
 from dota_winprob.services.scoring import Scorer
+from dota_winprob.telemetry import Telemetry, instrument_libraries, setup_telemetry
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class WorkerState:
     pipeline: Pipeline | None = None
     pool: asyncpg.Pool | None = None
     monitor: LoopLagMonitor = field(default_factory=LoopLagMonitor)
+    telemetry: Telemetry = field(default_factory=Telemetry)
 
     def require_pipeline(self) -> Pipeline:
         if self.pipeline is None:
@@ -46,13 +48,16 @@ def build_broker(settings: Settings, state: WorkerState) -> RabbitBroker:
         ack_policy=AckPolicy.REJECT_ON_ERROR,
     )
     async def handle(message: RabbitMessage) -> None:
-        token = REQUEST_ID.set(message.correlation_id or message.message_id)
+        raw = message.raw_message
+        token = REQUEST_ID.set(raw.correlation_id)
         try:
-            await state.require_pipeline().handle(
-                message.body,
-                message.headers,
-                message.correlation_id,
-            )
+            with log_context(task_id=raw.message_id):
+                await state.require_pipeline().handle(
+                    message.body,
+                    message.headers,
+                    message.correlation_id,
+                    redelivered=bool(raw.redelivered),
+                )
         finally:
             REQUEST_ID.reset(token)
 
@@ -91,11 +96,13 @@ def make_health(broker: RabbitBroker, state: WorkerState, settings: Settings) ->
 
 def create_app(settings: Settings | None = None) -> AsgiFastStream:
     settings = settings or get_settings()
-    setup_logging(settings)
+    setup_logging(settings, worker=settings.worker_name)
+    instrument_libraries()
     state = WorkerState()
     broker = build_broker(settings, state)
 
     async def startup() -> None:
+        state.telemetry = setup_telemetry(settings)
         model = await inference.load_model(settings)
         state.pool = await asyncpg.create_pool(
             settings.database_url,
@@ -130,7 +137,6 @@ def create_app(settings: Settings | None = None) -> AsgiFastStream:
         log.info(
             "Воркер запущен",
             extra={
-                "worker": settings.worker_name,
                 "prefetch_count": settings.prefetch_count,
                 "concurrency": settings.worker_concurrency,
                 "inference_delay_ms": settings.inference_delay_ms,
@@ -147,11 +153,11 @@ def create_app(settings: Settings | None = None) -> AsgiFastStream:
         log.info(
             "Воркер остановлен",
             extra={
-                "worker": settings.worker_name,
                 "processed": pipeline.processed if pipeline else 0,
                 "in_flight": pipeline.in_flight if pipeline else 0,
             },
         )
+        await asyncio.to_thread(state.telemetry.shutdown, settings.telemetry_shutdown_timeout)
 
     async def stopping() -> None:
         pipeline = state.pipeline

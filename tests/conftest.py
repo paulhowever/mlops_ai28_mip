@@ -4,12 +4,49 @@ from contextlib import AsyncExitStack
 import httpx
 import pytest
 from asgi_lifespan import LifespanManager
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from dota_winprob.app import create_app
 from dota_winprob.clients import broker as broker_client
 from dota_winprob.clients import opendota, postgres, tasks_repo
 from dota_winprob.config import Settings
+from dota_winprob.telemetry import metric_views
 from tests import fakes
+
+SPAN_EXPORTER = InMemorySpanExporter()
+METRIC_READER = InMemoryMetricReader()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def telemetry_providers():
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(SPAN_EXPORTER))
+    trace.set_tracer_provider(tracer_provider)
+    metrics.set_meter_provider(
+        MeterProvider(
+            metric_readers=[METRIC_READER],
+            views=metric_views(Settings(_env_file=None)),
+        )
+    )
+    yield
+    tracer_provider.shutdown()
+
+
+@pytest.fixture
+def spans():
+    SPAN_EXPORTER.clear()
+    yield SPAN_EXPORTER
+    SPAN_EXPORTER.clear()
+
+
+@pytest.fixture
+def metric_reader():
+    return METRIC_READER
 
 
 @pytest.fixture
@@ -26,6 +63,7 @@ def settings():
         rabbitmq_url="amqp://guest:guest@rabbitmq.invalid:5672/",
         broker_reconnect_interval=0.05,
         worker_name="worker-test",
+        otel_sdk_disabled=True,
         git_sha="abc1234",
         built_at="2026-09-24T00:00:00Z",
     )
