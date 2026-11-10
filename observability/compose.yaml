@@ -95,7 +95,7 @@ services:
       - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
     environment:
-      GOMEMLIMIT: 90MiB
+      GOMEMLIMIT: 120MiB
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:?}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       LOKI_URL: http://loki:3100/loki/api/v1/push
@@ -115,7 +115,7 @@ services:
       timeout: 3s
       start_period: 15s
       retries: 6
-    mem_limit: 128m
+    mem_limit: 160m
     logging: *obs-logging
 
   prometheus:

@@ -50,7 +50,12 @@ make experiment          # эксперимент с противодавлен�
 make prefetch            # пересоздать воркер, например WORKER_PREFETCH=8 make prefetch
 make reconfigure         # пересоздать очереди и сервисы, например с QUEUE_MAX_LENGTH=50
 make poison              # отправить в очередь некорректное сообщение
+make poison-retry        # валидная задача, которая падает на записи: 3 попытки и DLQ
 make kill-worker         # убить воркер посреди обработки
+
+make bootstrap           # стенд с нуля: приложение, наблюдаемость, обучение модели
+make obs-up              # приложение и стек наблюдаемости
+make obs-stats           # docker stats стека наблюдаемости
 ```
 
 ## Архитектура
@@ -62,7 +67,9 @@ src/dota_winprob/
 ├── worker.py         FastStream-воркер: подписчик, старт, /health
 ├── source.py         пакетный источник задач
 ├── config.py         настройки из переменных окружения
-├── logging_config.py структурированные логи и id запроса
+├── logging_config.py структурированные логи, id запроса, контекст задачи
+├── telemetry.py      OpenTelemetry: ресурс, экспорт OTLP, бакеты гистограмм
+├── instruments.py    метрики конвейера
 ├── schemas.py        pydantic-контракты запросов, ответов и сообщений
 ├── api/              транспортный слой
 │   ├── health.py     /healthz и /api/v1/health
@@ -724,11 +731,12 @@ Engine API). Скорость источника берётся из его со
 отдаётся docker-драйверу, а дальше его забирает сборщик логов.
 
 ```json
-{"timestamp": "2026-09-22T09:00:00.512Z", "level": "INFO", "logger": "dota_winprob.app", "message": "Запрос обработан", "service": "dota-winprob", "version": "0.1.0", "environment": "production", "git_sha": "a1b2c3d", "request_id": "6f1c...", "method": "GET", "path": "/api/v1/health", "status_code": 200, "duration_ms": 27.4}
+{"timestamp": "2026-09-22T09:00:00.512Z", "level": "INFO", "logger": "dota_winprob.app", "message": "Запрос обработан", "service": "dota-api", "version": "0.1.0", "environment": "production", "git_sha": "a1b2c3d", "request_id": "6f1c...", "method": "GET", "path": "/api/v1/health", "status_code": 200, "duration_ms": 27.4}
 ```
 
 Постоянные поля `service`, `version`, `environment` и `git_sha` подмешиваются
-в каждую запись. По логу видно, какой именно билд его написал: после выкатки
+в каждую запись. `service` — это `OTEL_SERVICE_NAME` (`dota-api`,
+`dota-worker`, `dota-source`), то же имя, что у трейсов. По логу видно, какой именно билд его написал: после выкатки
 нового образа это заметно сразу, не заходя в `/api/v1/version`.
 
 `request_id` живёт в `contextvars.ContextVar` и связывает все записи одного
@@ -755,6 +763,507 @@ Access-лог `/healthz` пишется на уровне DEBUG. `HEALTHCHECK` �
 всё остальное.
 
 Уровень задаётся переменной `LOG_LEVEL`.
+
+## Наблюдаемость
+
+По логам, трейсам и метрикам видно, что происходит с конвейером целиком и с
+каждой задачей: где пачка из 6000 задач, что случилось с задачей X,
+укладываемся ли в SLO и почему упал воркер. Нового сервиса нет — телеметрию
+пишут те же API, источник и воркер.
+
+```
+app / worker / source ──stdout JSON──► docker json-file ──► Alloy ──► Loki ─────┐
+        │                                                                       │
+        └──OTLP gRPC (трейсы и метрики)──► OTel Collector ──► Tempo ────────────┤
+                                                 │                              ├──► Grafana
+                                                 └──► Prometheus (OTLP) ────────┤
+RabbitMQ :15692 (rabbitmq_prometheus) ◄──scrape── Prometheus ───────────────────┘
+```
+
+### Профили и команды
+
+Стек описан в `observability/compose.yaml` и подключён в `docker-compose.yml`
+через `include:`. У каждого сервиса наблюдаемости есть `profiles`, поэтому
+`docker compose up -d` поднимает только приложение. `depends_on` приложения
+на сервисы наблюдаемости не ссылается.
+
+| Профиль | Что поднимает | Команда |
+|---|---|---|
+| без профиля | app, worker, postgres, rabbitmq, minio, mlflow | `make up` |
+| `logs` | + alloy, loki | `make logs-up` |
+| `traces` | + otel-collector, tempo | `make traces-up` |
+| `metrics` | + otel-collector, prometheus | `make metrics-up` |
+| `observability` | всё выше и grafana | `make obs-up` |
+
+```bash
+make bootstrap           # стенд с нуля: obs-up, обучение модели, воркер с моделью
+make obs-up              # приложение и весь стек наблюдаемости, со сборкой образа
+make obs-down            # остановить
+make obs-wipe            # остановить и удалить тома, вместе с моделью в MLflow
+make obs-stats           # docker stats сервисов наблюдаемости
+make obs-logs            # логи сервисов наблюдаемости
+make poison              # невалидное сообщение: сразу в DLQ, без повторов
+make poison-retry        # валидная задача, которую не удаётся записать: 3 попытки и DLQ
+```
+
+Grafana: <http://localhost:3000>, пользователь `admin`, пароль из
+`GRAFANA_ADMIN_PASSWORD`. Prometheus, Loki, Tempo и OTLP-порты Collector
+опубликованы только на `127.0.0.1`. Версии образов закреплены в
+`.env.example` (`GRAFANA_VERSION`, `LOKI_VERSION`, `TEMPO_VERSION`,
+`PROMETHEUS_VERSION`, `ALLOY_VERSION`, `OTELCOL_VERSION`), `latest` нет.
+
+**Стенд с нуля.** `docker compose down -v` удаляет и тома MLflow, то есть
+модель. Без модели воркер не стартует: пишет ERROR «Модель не загружена» и
+уходит в рестарт по `restart: unless-stopped`. `make bootstrap` поднимает
+профиль `observability`, обучает модель (`make train`, около минуты на
+ноутбуке, нужен `data/raw`) и пересоздаёт воркер. Без пересоздания воркер
+тоже поднимается сам: в проверке он стал `healthy` через 22 секунды после
+появления алиаса `champion`, на очередном рестарте. Grafana, datasources,
+дашборд и алерты при этом приходят из provisioning, кликать ничего не нужно.
+
+### Сценарий защиты
+
+Цифры — из прогона на чистом стенде (`down -v`, `make bootstrap`),
+`INFERENCE_DELAY_MS=200`, `WORKER_CONCURRENCY=4`, `QUEUE_MAX_LENGTH=100`.
+
+1. **Стенд с нуля.** `make obs-wipe && make bootstrap`. В Grafana папка
+   «Конвейер» с дашбордом и двумя правилами алертов, три datasources.
+   `make obs-stats` — таблица из раздела про бюджет памяти.
+2. **Нагрузка.** `make source`. Через 10 секунд `ready` в `tasks.score`
+   упирается в лимит (77–101), источник получает nack и уходит в паузы.
+   PromQL:
+
+   ```promql
+   sum(rate(pipeline_source_published_total[1m]))              # 17.8 задач/с
+   sum(rate(pipeline_worker_tasks_total{result="ok"}[1m]))     # 18.1 задач/с
+   ```
+
+   Скорость источника равна пропускной способности воркера: 4 потока по
+   ~0.21 с дают ~19 задач/с. Алерт «Очередь tasks.score заполнена более чем
+   на 90%» перешёл в Firing через 70 секунд после старта источника (минута
+   выдержки и интервал оценки 10 с).
+3. **Второй воркер.** `make workers WORKERS=2`, дашборд не меняется:
+
+   ```promql
+   sum(rate(pipeline_worker_tasks_total{result="ok"}[1m]))                 # 37.8 задач/с
+   sum by (instance) (rate(pipeline_worker_tasks_total{result="ok"}[1m]))  # 18.9 и 18.9
+   sum(rate(pipeline_source_published_total[1m]))                          # 37.4 задач/с
+   ```
+
+   Пропускная способность выросла в 2.08 раза, источник ускорился вместе с
+   ней. Новая реплика сама попадает в переменную `worker` дашборда, а в Tempo
+   её спаны различаются по `service.instance.id` (hostname контейнера):
+   `{resource.service.instance.id="4715e4f60bd1" && name="tasks.score process"}`.
+4. **Случайная задача.** Берём task_id из базы:
+
+   ```bash
+   docker compose exec postgres psql -U postgres -d dota_winprob \
+     -c "select task_id from tasks where status='done' order by random() limit 1"
+   ```
+
+   В Grafana Explore → Loki: `{service=~".+"} | task_id="batch:566"`. Две
+   записи: источник «Задача опубликована» (`attempts: 1`) и воркер «Задача
+   выполнена» (`queue_wait_s: 4.353`, `model_version: "4"`, `worker`). У
+   обеих один `trace_id`, клик по нему открывает трейс:
+
+   ```
+   source publish            dota-source   +0 мс       1.7 мс
+     tasks.score publish     dota-source   +0.2 мс     1.3 мс
+     tasks.score process     dota-worker   +4352 мс    207 мс   task.queue_wait_s=4.35
+       inference             dota-worker   +4353 мс    206 мс   model.alias=champion, model.version=4
+       db save_result        dota-worker   +4559 мс    0.7 мс
+         INSERT, SELECT      asyncpg
+   ```
+
+   Время в очереди видно дважды: атрибутом `task.queue_wait_s` на спане
+   `process` и разрывом между концом `publish` и началом `process`.
+   Время inference — длительность спана `inference`.
+5. **Ядовитое сообщение.** `make poison` кладёт в exchange строку
+   `not a task`: валидация детерминирована, повторять бессмысленно, поэтому
+   одна попытка, ERROR «Невалидное сообщение уходит в DLQ без повторов» и
+   спан со статусом ERROR и событием `dlq`. Алерт «В очереди tasks.dlq есть
+   сообщения» — Firing через 5 секунд.
+   `make poison-retry` публикует валидную задачу, которую нельзя записать в
+   Postgres (`task_id` с NUL-символом): видны все три попытки — два WARNING
+   «Задача не обработана» с трейсбеком в `exception`, `attempt` 1 и 2, ERROR
+   на третьей, ERROR «Попытки исчерпаны, задача уходит в DLQ». В Tempo это
+   один трейс: три спана `tasks.score process` со статусом ERROR, у каждого
+   событие `exception` с `attempt`, у первых двух событие `retry`, у
+   последнего `dlq` и `task.dead_lettered=true`.
+6. **SIGTERM воркеру под нагрузкой.** `docker stop -t 40 <worker>`:
+
+   ```
+   13:00:31.706 INFO Воркер останавливается          in_flight=4
+   13:00:31.707 INFO Подписка отменена, новые сообщения брокер не отдаёт
+   13:00:31.714 INFO Задача выполнена                task_id=batch:5025
+   13:00:31.756 INFO Задача выполнена                task_id=batch:5027
+   13:00:31.762 INFO Задача выполнена                task_id=batch:5028
+   13:00:31.844 INFO Задача выполнена                task_id=batch:5032
+   13:00:31.850 INFO Воркер остановлен               in_flight=0, processed=1716
+   ```
+
+   Все четыре задачи в работе доведены, их трейсы закрыты без ошибок.
+7. **Заваливание API.** 300 параллельных `POST /api/v1/tasks` при полной
+   очереди: 4 ответа 202 и 296 ответов 503. Панель «Доля ответов 503»
+   показала 98.7%, в Tempo 296 трейсов
+   `{resource.service.name="dota-api" && span.http.response.status_code=503}`:
+   корневой спан со статусом ERROR, `task submit` с событием `overloaded` и
+   исключением `Overloaded`, `tasks.score publish` с `DeliveryError: Basic.Nack`.
+8. **Остановка Collector и Loki.** `docker compose stop otel-collector loki`
+   под нагрузкой — что происходит, описано ниже в «Отказ стека наблюдаемости».
+
+### Выбор стека
+
+| Задача | Выбор | Почему не альтернатива |
+|---|---|---|
+| Логи | Loki + Grafana Alloy | Loki индексирует только лейблы, а не текст, и на стенде занимает ~100 МиБ; ELK держит JVM на гигабайты и индексирует каждое слово. VictoriaLogs легче Loki, но у Loki нативная корреляция с Tempo в Grafana. |
+| Агент логов | Grafana Alloy | Читает логи контейнеров через docker.sock, фильтрует по лейблу `com.docker.compose.project`, разбирает JSON и пишет в Loki. Приложение не знает, куда уходят логи: оно пишет в stdout. |
+| Трейсы | OTel Collector (contrib) + Tempo | Tempo хранит блоки в файлах без отдельной БД, поиск по trace_id и TraceQL по атрибутам. Jaeger для хранения нужен Elasticsearch или Cassandra. |
+| Метрики | Prometheus 3 | Принимает OTLP сам (`--web.enable-otlp-receiver`), скрейпит RabbitMQ, хранит exemplars. |
+
+**Collector, а не прямая отправка.** Приложение знает только
+`OTEL_EXPORTER_OTLP_ENDPOINT`. Куда идут данные, батчи, ретраи и лимит памяти
+решает Collector, смена хранилища не трогает приложение. Порядок процессоров:
+`memory_limiter` первым — при превышении лимита он отклоняет данные на входе,
+пока они не заняли память в остальных процессорах, а SDK повторит отправку;
+`batch` вторым — собирает принятое в крупные пачки, меньше запросов в Tempo
+и Prometheus. `limit_mib: 150` при `mem_limit: 192m` оставляет запас на
+рантайм, `GOMEMLIMIT` подгоняет сборщик мусора под тот же потолок. У
+Collector включено расширение `health_check` на `:13133`, healthcheck
+compose ходит в него `wget` из busybox, примонтированного томом-образом: в
+образе Collector нет shell.
+
+### Логи
+
+Одна строка JSON в stdout от каждого процесса, формат общий для API,
+воркера и источника:
+
+```json
+{"timestamp": "2026-11-10T12:58:03.439Z", "level": "INFO", "logger": "dota_winprob.services.pipeline", "message": "Задача выполнена", "service": "dota-worker", "version": "0.1.0", "environment": "development", "git_sha": "61518c2", "worker": "75339c92eb0f", "request_id": "0cc9cf11-7384-46f2-b122-e5aa95ced066", "task_id": "batch:566", "attempt": 1, "trace_id": "b2005c1e5441a5cccbc6a285699ff454", "span_id": "7c5a7b8be7eb833a", "win_probability": 0.7199387685718724, "queue_wait_s": 4.353, "model_version": "4"}
+```
+
+**Библиотека — стандартный `logging` со своим `JsonFormatter`.** Все
+библиотеки проекта — uvicorn, FastStream, aio-pika, aiormq, MLflow,
+OpenTelemetry — пишут через `logging`. Один обработчик на корневом логгере
+переводит их записи в тот же JSON без мостов и патчей, а свои обработчики
+библиотек снимаются. structlog или loguru всё равно пришлось бы стыковать со
+стандартным `logging` ради чужих логгеров, а контекст здесь и так живёт в
+`contextvars`. Python-предупреждения перехвачены `logging.captureWarnings`
+(`RuntimeWarning: coroutine ... was never awaited` приходит как запись
+`py.warnings`), необработанное исключение уходит в лог CRITICAL через
+`sys.excepthook`. Проверка `docker compose logs` после прогона: 611 строк
+API, 6659 строк воркеров, 6923 строки источника — ни одной не-JSON.
+
+**task_id через брокер.** Источник и API кладут task_id в AMQP-свойство
+`message_id`, `request_id` — в `correlation_id`. Обработчик воркера
+оборачивает обработку в `log_context(task_id=...)` — это `ContextVar`, и
+поле попадает во все записи обработчика, включая записи библиотек и записи из
+пула потоков inference (контекст копируется в executor). `trace_id` и
+`span_id` форматтер берёт из текущего спана.
+
+**Ключевые события и уровни.**
+
+| Событие | Уровень | Где |
+|---|---|---|
+| Модель загружена: alias, версия, run_id | INFO | воркер |
+| Модель не загружена | ERROR | воркер |
+| Задача опубликована / выполнена | INFO | источник / воркер |
+| Брокер отклоняет задачи, источник замедляется (сводка раз в 10 с) | WARNING | источник |
+| Задача отклонена, ответ 503 | WARNING | API |
+| Ошибка обработки со стектрейсом и `attempt` | WARNING, на последней попытке ERROR | воркер |
+| Перевод в DLQ | ERROR | воркер |
+| Начало и конец graceful shutdown | INFO | воркер, источник |
+| Ошибка экспорта телеметрии | ERROR, не чаще раза в минуту | все |
+
+Health-check `/healthz` и `/health` на INFO не пишутся. Пароли из DSN и
+параметры `password=`, `token=` маскируются в каждой строке, содержимое
+задач в лог не попадает.
+
+**Шум брокера.** Пока RabbitMQ лежит, aio-pika раз в 5 секунд пишет WARNING
+«Connection attempt failed», а aiormq на ту же попытку — ERROR «error when
+creating transport». За 15 минут простоя это 180 ERROR на процесс, и панель
+ошибок тонет в одном событии. Логгеры `aiormq` и `aio_pika` пропускаются
+через тот же троттлинг, что и экспортёры OpenTelemetry: одна запись на
+шаблон сообщения в минуту, следующая несёт `suppressed` — сколько таких
+было скрыто. Первое ERROR «Unexpected connection close» видно сразу, факт
+простоя остаётся в ошибках, но одной строкой в минуту. Уровни библиотек не
+переписываются: ошибка соединения — это ошибка.
+
+**Лейблы Loki — только `service`, `level`, `env`.** `service` берётся из
+поля `service` записи, а оно из `OTEL_SERVICE_NAME` — один источник истины
+для логов и трейсов (`dota-api`, `dota-worker`, `dota-source`). У чужих
+контейнеров проекта (rabbitmq, postgres, grafana) поля нет, и лейблом
+остаётся имя compose-сервиса. `task_id` и `trace_id` — structured metadata:
+они не создают потоков, но фильтруются без разбора JSON и точно:
+`| task_id="batch:566"` не захватит `batch:5660`, в отличие от `|= "batch:566"`. `/loki/api/v1/labels` возвращает ровно `env`,
+`level`, `service`. Если сделать task_id лейблом, каждая задача станет
+отдельным потоком: прогон файла даст 50 000 потоков с одной-двумя строками,
+индекс и число мелких чанков вырастут на порядки, запросы по сервису начнут
+перебирать десятки тысяч потоков. Loki рассчитан на сотни потоков, а не на
+поток на запрос.
+
+### Трейсы
+
+OpenTelemetry SDK, экспорт OTLP gRPC в Collector. Автоинструментация:
+FastAPI, asyncpg, httpx; FastStream — встроенная
+`RabbitTelemetryMiddleware`. `service.name` из `OTEL_SERVICE_NAME`,
+`service.version` и `deployment.environment.name` из
+`OTEL_RESOURCE_ATTRIBUTES`, `service.instance.id` compose дописывает туда же
+из hostname контейнера в обёртке команды. Адресов в коде нет.
+
+**Ожидаемый трейс задачи из API** — один trace_id через три процесса:
+
+```
+POST /api/v1/tasks                dota-api     SERVER
+  task submit                     dota-api
+    tasks.score publish           dota-api     PRODUCER
+    tasks.score process           dota-worker  CONSUMER   attempt, task.id, task.queue_wait_s
+      inference                   dota-worker             model.name, model.alias, model.version, attempt
+      db save_result              dota-worker  CLIENT
+        INSERT / SELECT           asyncpg
+    INSERT                        asyncpg (строка pending)
+```
+
+**Контекст через RabbitMQ.** Middleware FastStream на публикации кладёт
+W3C `traceparent` в заголовки AMQP-сообщения, на приёме извлекает его и
+делает `process` дочерним к `publish`. Повтор публикуется в `tasks.retry` из
+спана `process` и несёт его `traceparent`, поэтому все попытки ядовитой
+задачи — один трейс. Здесь выбран parent, а не span link: попытка — это
+продолжение той же операции, её хочется видеть одним деревом. Link подошёл
+бы для пакетной обработки, где один спан потребителя относится к сотне
+сообщений из разных трейсов.
+
+**Контекст через пул потоков.** Inference идёт в `ThreadPoolExecutor`,
+куда `contextvars` сами не переезжают. `Scorer.score` делает
+`contextvars.copy_context()` и запускает функцию через `context.run`: в
+потоке виден текущий спан `process` и контекст логов, поэтому `inference`
+дочерний к `process`, а не корневой.
+
+**Источник.** Один трейс на задачу: корневой спан `source publish` с явно
+пустым родительским контекстом. Отказы брокера — события `broker.nack`,
+паузы — события `backoff` с `delay_s`. Один трейс на весь файл дал бы
+дерево на 50 000 задач, которое не открывается и не ищется.
+
+**Ошибки.** Статус ERROR, `record_exception` с атрибутом `attempt`, номер
+попытки на спане `process`, событие `dlq` и `task.dead_lettered`. Ответ 503
+даёт трейс со статусом ERROR на корневом спане.
+
+**Семплер.** `OTEL_TRACES_SAMPLER=parentbased_always_on` на стенде: нужен
+каждый трейс, поток маленький. `parentbased_*` важен в воркере: решение
+принимается у корня (API, источник) и наследуется через `traceparent`, иначе
+трейс рвался бы на половине. Для прода с сотнями задач в секунду (~8 спанов
+на задачу — тысячи спанов в секунду) хранить всё дорого и бесполезно, а
+голый `traceidratio` выбросит ошибки с той же вероятностью, что и успехи.
+Схема для прода: SDK отдаёт всё (`parentbased_always_on`, при нехватке
+сети или CPU — `parentbased_traceidratio` с долей 0.5), а основное
+сокращение делает `tail_sampling` в Collector, который видит трейс целиком:
+политики «статус ERROR», «латентность выше 1 с», «есть событие dlq» —
+сохранять всегда, остальное — 5%. Для этого все спаны трейса должны
+попадать в один Collector: перед ним ставится слой с `loadbalancing`
+exporter по trace_id.
+
+### Метрики
+
+**Push по OTLP для приложения, pull для RabbitMQ.** Источник живёт ровно
+столько, сколько читает файл: на `--limit 100` это пара секунд, и Prometheus
+с интервалом 5 с может его просто не застать, а последние инкременты перед
+выходом не увидит никогда. SDK же при остановке делает финальный экспорт.
+Воркеры масштабируются `--scale`, и для pull понадобилось бы discovery
+реплик. Трейсы и метрики идут одним каналом через тот же Collector.
+RabbitMQ живёт долго и сам отдаёт метрики плагином `rabbitmq_prometheus`,
+поэтому его Prometheus скрейпит раз в 5 с. У Prometheus включён
+`created-timestamp-zero-ingestion`: новый ряд счётчика (например, первые 503)
+начинается с нуля в момент старта, а не с уже накопленного значения, иначе
+`rate` и `increase` первого всплеска показывали бы 0.
+
+| Инструмент OTel | Ряд в Prometheus | Тип |
+|---|---|---|
+| `http.server.request.duration` | `http_server_request_duration_seconds_*` | histogram, бакеты 1 мс – 5 с |
+| `pipeline.source.published` | `pipeline_source_published_total` | counter |
+| `pipeline.source.rejected` | `pipeline_source_rejected_total` | counter |
+| `pipeline.source.wait` | `pipeline_source_wait_seconds_total` | counter, секунды пауз |
+| `pipeline.worker.tasks` | `pipeline_worker_tasks_total{result}` | counter, ok / duplicate / error / dlq |
+| `pipeline.worker.inference.duration` | `pipeline_worker_inference_duration_seconds_*` | histogram |
+| `pipeline.worker.queue_wait` | `pipeline_worker_queue_wait_seconds_*` | histogram, 10 мс – 300 с |
+| `pipeline.worker.in_flight` | `pipeline_worker_in_flight` | up-down counter |
+| `pipeline.worker.redeliveries` | `pipeline_worker_redeliveries_total{reason}` | counter, redelivered / retry |
+| `pipeline.queue.max_length` | `pipeline_queue_max_length` | gauge, лимит из `QUEUE_MAX_LENGTH` |
+| `process.memory.usage` | `process_memory_usage_bytes` | RSS процесса |
+| плагин RabbitMQ | `rabbitmq_detailed_queue_messages_ready{queue}`, `..._unacked`, `..._consumers` | gauge |
+
+Бакеты inference считаются из `INFERENCE_DELAY_MS`: задержка плюс
+1–1000 мс и задержка ×2 и ×5. При 200 мс границы
+0.2, 0.201, 0.202, 0.205, 0.21, 0.22, 0.25, 0.3, 0.4, 0.45, 0.7, 1, 1.2 с —
+плотно вокруг реального времени, поэтому p50/p95/p99 считаются точно
+(p50 0.213 с, p95 0.245 с), а дефолтные бакеты 0.25/0.5 дали бы одну
+ступеньку.
+
+**Лейблы и число рядов.** Лейблы: `job` (service.name), `instance`
+(service.instance.id), `deployment_environment_name`, `service_version`,
+`result`, `reason`, `http_route`, `http_request_method`,
+`http_response_status_code`, `le`, `queue`. Оценка для 4 воркеров:
+
+| Метрика | Расчёт | Рядов |
+|---|---|---|
+| `http_server_request_duration_seconds_*` | 4 маршрута × 2 метода × 4 кода × (12 бакетов + +Inf + sum + count) | 480 |
+| `pipeline_worker_inference_duration_seconds_*` | 4 воркера × (13 + 3) | 64 |
+| `pipeline_worker_queue_wait_seconds_*` | 4 × (13 + 3) | 64 |
+| `pipeline_worker_tasks_total` | 4 × 4 результата | 16 |
+| `pipeline_worker_redeliveries_total` | 4 × 2 причины | 8 |
+| `pipeline_worker_in_flight` | 4 | 4 |
+| `pipeline_source_*` | 3 счётчика | 3 |
+| `pipeline_queue_max_length`, `process_memory_usage_bytes` | 6 процессов × 2 | 12 |
+| `rabbitmq_detailed_queue_*` | 3 очереди × 6 метрик | 18 |
+
+Около 700 рядов; на живом стенде после прогона `count({job=~"dota-.*|rabbitmq"})`
+дал 338, весь Prometheus — 1238 вместе с собственными метриками. Если
+повесить на `pipeline_worker_tasks_total` и гистограммы лейбл `task_id`,
+прогон `data/tasks.csv` (49 948 задач) даст по ряду на задачу в каждом ряду
+метрики: счётчик результатов — ~50 000 рядов, гистограмма inference —
+50 000 × 16 = ~800 000, время в очереди — ещё ~800 000. Полтора миллиона
+рядов, каждый с одной точкой, — память Prometheus растёт на гигабайты, а
+агрегировать по ним нечего. Поэтому task_id и trace_id живут в логах и
+трейсах, а в метриках только ссылкой через exemplars.
+
+**PromQL для защиты.**
+
+```promql
+# скорость источника и пропускная способность воркеров
+sum(rate(pipeline_source_published_total[1m]))
+sum(rate(pipeline_worker_tasks_total{result="ok"}[1m]))
+sum by (instance) (rate(pipeline_worker_tasks_total{result="ok"}[1m]))
+
+# очередь против лимита
+max(rabbitmq_detailed_queue_messages_ready{queue="tasks.score"})
+  / max(last_over_time(pipeline_queue_max_length[10m]))
+
+# p95 inference и ответа API (SLO)
+histogram_quantile(0.95, sum by (le) (rate(pipeline_worker_inference_duration_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{job="dota-api"}[5m])))
+
+# доля 503
+sum(rate(http_server_request_duration_seconds_count{job="dota-api",http_response_status_code="503"}[5m]))
+  / sum(rate(http_server_request_duration_seconds_count{job="dota-api"}[5m]))
+
+# где пачка: опубликовано и обработано за час, что в DLQ
+sum(increase(pipeline_source_published_total[1h]))
+sum by (result) (increase(pipeline_worker_tasks_total[1h]))
+max(rabbitmq_detailed_queue_messages_ready{queue="tasks.dlq"})
+```
+
+**LogQL для защиты.**
+
+```logql
+{service=~".+"} | task_id="batch:566"                         # история задачи
+{level=~"ERROR|CRITICAL"}                                     # все ошибки, окно 15 минут
+sum by (service) (count_over_time({level="ERROR"}[15m]))
+{service="dota-worker"} |= "DLQ"                              # переводы в DLQ
+{service="dota-worker"} |~ "Воркер (останавливается|остановлен)"
+{service="dota-source"} |= "Источник"                          # прогресс пачки
+```
+
+### Дашборд «Конвейер» и корреляция
+
+`observability/grafana/dashboards/pipeline.json`, папка «Конвейер»:
+
+* глубина `tasks.score` (ready, unacked, очередь повторов) с красной
+  пунктирной линией лимита из `pipeline_queue_max_length`;
+* скорость источника и суммарная пропускная способность воркеров на одном
+  графике, рядом разбивка по воркерам и результаты по типам;
+* p50/p95/p99 inference, ответа API и времени в очереди —
+  `histogram_quantile` по `sum by (le)`, а не среднее перцентилей;
+* память процессов (RSS) источника, API и воркеров;
+* доля 503, отказы брокера источнику (1/с) и доля времени источника в паузах;
+* глубина DLQ и число переводов в DLQ;
+* последние ошибки из Loki.
+
+Переменные: `worker` (instance воркеров, All по умолчанию, новые реплики
+подхватываются сами) и `service` для панели логов. Счётчики только через
+`rate`/`increase`, единицы заданы у каждой панели (ops, s, bytes,
+percentunit, short), у смешанной панели — через overrides. Каждый запрос
+панелей проверен на живых данных: ни одна панель не пустая.
+
+* **Лог → трейс.** Derived field `trace_id` в datasource Loki берёт
+  `"trace_id": "<32 hex>"` из строки и открывает трейс в Tempo.
+* **Спан → логи.** `tracesToLogsV2` в Tempo: `{env=~".+"} |= "<trace_id>"`
+  по всем сервисам, окно ±5 минут. Для трейса ядовитой задачи — 7 строк
+  воркера.
+* **График → трейс.** Exemplars: Python SDK прикрепляет trace_id к
+  измерениям гистограмм внутри спана, Prometheus хранит их
+  (`exemplar-storage`), панели латентности API и inference показывают точки
+  со ссылкой в Tempo.
+
+### Алерты
+
+Grafana Alerting, `observability/grafana/provisioning/alerting/rules.yaml`,
+оценка раз в 10 с.
+
+| Алерт | Условие | for | Обоснование |
+|---|---|---|---|
+| Очередь tasks.score заполнена более чем на 90% | `max_over_time(ready[30s]) / лимит > 0.9` | 1m | При 100% брокер отклоняет публикации, источник уходит в паузы, API отвечает 503; 10% запаса дают время вмешаться. `for: 1m` отсекает короткие упоры в лимит, нормальные при противодавлении. `max_over_time` за 30 с нужен из-за пилы: под нагрузкой ready скачет 77–101, пока источник спит в backoff, и сравнение последней точки сбрасывало Pending раньше минуты. |
+| В очереди tasks.dlq есть сообщения | `ready{queue="tasks.dlq"} > 0` | 0s | В DLQ попадают только исчерпавшие попытки и невалидные сообщения, штатно она пуста — одно сообщение уже потерянная задача, ложных срабатываний нет. Глубина, а не `increase`: алерт горит, пока сообщения не разобраны. |
+
+Лимит не зашит в правило: API и воркеры отдают `QUEUE_MAX_LENGTH` метрикой
+`pipeline_queue_max_length`, правило и линия на дашборде делят на неё.
+Подставить переменную окружения в provisioning правил Grafana не умеет —
+`$__env{...}` в выражении остаётся строкой, это проверено. Алерты — по
+симптомам (очередь переполняется, задачи теряются), а не по причинам
+(воркер упал): причина видна на дашборде рядом.
+
+### Бюджет памяти
+
+Retention: Loki 48 ч (compactor), Tempo 48 ч (`block_retention`),
+Prometheus 2 дня (`METRICS_RETENTION`). Данные — в именованных томах
+`loki-data`, `tempo-data`, `prometheus-data`, `grafana-data`, `alloy-data`.
+У хранилищ, Grafana, Alloy и Collector есть healthcheck.
+
+`docker stats --no-stream` под нагрузкой: источник и 2 воркера, ~37 задач/с.
+
+| Сервис | `mem_limit` | Факт |
+|---|---|---|
+| otel-collector | 192 МБ | 92 МиБ |
+| tempo | 256 МБ | 197 МиБ |
+| loki | 256 МБ | 102 МиБ |
+| prometheus | 256 МБ | 53 МиБ |
+| alloy | 160 МБ | 101 МиБ |
+| grafana | 384 МБ | 254 МиБ |
+| **Итого** | **1504 МБ** | **799 МиБ** |
+
+Tempo под нагрузкой ближе всех к лимиту (197 из 256), после нагрузки
+опускается до 112 МиБ. Alloy держится около 100–105 МиБ, поэтому лимит
+поднят со 128 до 160 МБ. OOM-kill за прогон не было.
+
+### Отказ стека наблюдаемости
+
+Проверено под нагрузкой: `docker compose stop otel-collector loki` на 20
+секунд.
+
+* Конвейер работает: API отвечает 202/503 за 4–8 мс, воркер держит
+  18 задач/с, источник публикует. Экспорт идёт в фоновых потоках SDK,
+  `depends_on` на стек нет.
+* Приложение пишет ERROR «Failed to export ... DEADLINE_EXCEEDED» — не чаще
+  раза в минуту на процесс благодаря троттлингу.
+* Логи не теряются: они лежат в json-file docker, Alloy помнит позицию и
+  после старта Loki дослал строки за время простоя.
+* Метрики: на время простоя в рядах дыра, но счётчики кумулятивные, и после
+  восстановления `increase` за окно правильный; потеряны только точки gauge.
+* Трейсы частично потеряны: `BatchSpanProcessor` держит 2048 спанов и
+  повторяет экспорт, остальное отбрасывает. Окно в момент остановки дало
+  42 трейса вместо ~130.
+
+### Что нашла телеметрия
+
+* Повтор при полной рабочей очереди задерживается до ~3 минут. Сообщение из
+  `tasks.retry` по TTL уходит обратно в `tasks.score` через dead-lettering
+  `at-least-once`; если очередь в этот момент на лимите, брокер его не
+  принимает и повторяет перекладку только по своему таймеру. В трейсе
+  `poison-retry` под нагрузкой между второй и третьей попыткой 181 секунда.
+  Задача не теряется, но задержка повтора под нагрузкой — свойство схемы.
+* Первый всплеск 503 не был виден в `rate`: ряд счётчика появлялся сразу со
+  значением 193. Лечится флагом `created-timestamp-zero-ingestion`.
+* Воркер с успешной задачей не писал ничего на INFO, и историю задачи из
+  базы нельзя было найти в логах; теперь источник и воркер пишут по строке
+  на задачу.
 
 ## Запуск в Docker
 
