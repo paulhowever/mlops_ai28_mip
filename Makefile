@@ -1,6 +1,7 @@
 .PHONY: install ml-install hooks lint fmt run up down logs release data eda train \
 	tasks-file source workers worker-logs worker-health experiment \
-	reconfigure prefetch poison kill-worker
+	reconfigure prefetch poison kill-worker \
+	obs-up obs-down obs-wipe obs-logs obs-stats logs-up traces-up metrics-up
 
 WORKERS ?= 2
 
@@ -98,3 +99,29 @@ poison:
 
 kill-worker:
 	docker kill $$(docker compose ps -q worker | head -1)
+
+OBS_SERVICES = otel-collector alloy loki tempo prometheus grafana
+
+obs-up:
+	docker compose --profile observability up -d
+
+obs-down:
+	docker compose --profile observability down
+
+obs-wipe:
+	docker compose --profile observability down --volumes
+
+logs-up:
+	docker compose --profile logs up -d
+
+traces-up:
+	docker compose --profile traces up -d
+
+metrics-up:
+	docker compose --profile metrics up -d
+
+obs-logs:
+	docker compose --profile observability logs -f $(OBS_SERVICES)
+
+obs-stats:
+	docker stats --no-stream $$(docker compose --profile observability ps -q $(OBS_SERVICES))

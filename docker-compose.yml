@@ -1,3 +1,6 @@
+include:
+  - path: observability/compose.yaml
+
 x-app-build: &app-build
   context: .
   args:
@@ -24,13 +27,27 @@ x-pipeline-env: &pipeline-env
   INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-200}
   PUBLISH_TIMEOUT: ${PUBLISH_TIMEOUT:-1.0}
 
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+  OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+  OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-5000}
+  OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+  OTEL_RESOURCE_ATTRIBUTES: service.version=${SERVICE_VERSION:-0.1.0},deployment.environment.name=${ENVIRONMENT:-development}
+
 services:
   app:
     build: *app-build
     image: dota-winprob:local
     restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - export OTEL_RESOURCE_ATTRIBUTES="$$OTEL_RESOURCE_ATTRIBUTES,service.instance.id=$$(hostname)"; exec uvicorn dota_winprob.app:app --host 0.0.0.0 --port 8000
     environment:
-      <<: *pipeline-env
+      <<: [*pipeline-env, *otel-env]
+      OTEL_SERVICE_NAME: dota-api
       OPENDOTA_BASE_URL: ${OPENDOTA_BASE_URL:-https://api.opendota.com}
       HEALTH_PROBE_TIMEOUT: ${HEALTH_PROBE_TIMEOUT:-3.0}
     ports:
@@ -42,6 +59,7 @@ services:
         condition: service_healthy
     networks:
       - backend
+      - observability
     healthcheck:
       test:
         - CMD
@@ -62,10 +80,14 @@ services:
   worker:
     build: *app-build
     image: dota-winprob:local
-    command: ["uvicorn", "dota_winprob.worker:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
+    command:
+      - sh
+      - -c
+      - export OTEL_RESOURCE_ATTRIBUTES="$$OTEL_RESOURCE_ATTRIBUTES,service.instance.id=$$(hostname)"; exec uvicorn dota_winprob.worker:app --host 0.0.0.0 --port 8001 --no-access-log
     restart: unless-stopped
     environment:
-      <<: *pipeline-env
+      <<: [*pipeline-env, *otel-env]
+      OTEL_SERVICE_NAME: dota-worker
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MODEL_NAME: ${MODEL_NAME:-dota-winprob}
       MODEL_ALIAS: ${MODEL_ALIAS:-champion}
@@ -83,6 +105,7 @@ services:
         condition: service_healthy
     networks:
       - backend
+      - observability
     healthcheck:
       test:
         - CMD
@@ -104,10 +127,14 @@ services:
     build: *app-build
     image: dota-winprob:local
     profiles: ["batch"]
-    command: ["python", "-m", "dota_winprob.source", "--file", "/app/data/tasks.csv"]
+    command:
+      - sh
+      - -c
+      - export OTEL_RESOURCE_ATTRIBUTES="$$OTEL_RESOURCE_ATTRIBUTES,service.instance.id=$$(hostname)"; exec python -m dota_winprob.source --file /app/data/tasks.csv
     restart: "no"
     environment:
-      <<: *pipeline-env
+      <<: [*pipeline-env, *otel-env]
+      OTEL_SERVICE_NAME: dota-source
       SOURCE_BACKOFF_MIN: ${SOURCE_BACKOFF_MIN:-0.02}
       SOURCE_BACKOFF_MAX: ${SOURCE_BACKOFF_MAX:-0.5}
     volumes:
@@ -117,6 +144,7 @@ services:
         condition: service_healthy
     networks:
       - backend
+      - observability
     deploy:
       resources:
         limits:
@@ -135,10 +163,13 @@ services:
     ports:
       - "${RABBITMQ_PORT:-5672}:5672"
       - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    expose:
+      - "15692"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     networks:
       - backend
+      - observability
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
