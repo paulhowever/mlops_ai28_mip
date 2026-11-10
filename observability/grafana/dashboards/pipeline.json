@@ -66,25 +66,6 @@
           "value": "$__all"
         },
         "sort": 1
-      },
-      {
-        "name": "queue_limit",
-        "label": "Лимит очереди (x-max-length)",
-        "type": "textbox",
-        "query": "100",
-        "current": {
-          "selected": false,
-          "text": "100",
-          "value": "100"
-        },
-        "options": [
-          {
-            "selected": true,
-            "text": "100",
-            "value": "100"
-          }
-        ],
-        "hide": 0
       }
     ]
   },
@@ -109,7 +90,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Глубина очереди tasks.score и лимит x-max-length",
-      "description": "Ready - сообщения, ожидающие воркера; именно их считает x-max-length. Unacked - сообщения у воркеров, в лимит не входят. Красная пунктирная линия - лимит из переменной queue_limit (QUEUE_MAX_LENGTH).",
+      "description": "Ready - сообщения, ожидающие воркера; именно их считает x-max-length. Unacked - сообщения у воркеров, в лимит не входят. Красная пунктирная линия - лимит из метрики pipeline_queue_max_length, которую API и воркеры отдают из QUEUE_MAX_LENGTH.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -156,7 +137,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "vector($queue_limit)",
+          "expr": "max(last_over_time(pipeline_queue_max_length[10m]))",
           "legendFormat": "лимит x-max-length",
           "refId": "D",
           "editorMode": "code"

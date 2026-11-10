@@ -1,3 +1,7 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 receivers:
   otlp:
     protocols:
@@ -17,7 +21,7 @@ processors:
     send_batch_max_size: 1024
 
 exporters:
-  otlp/tempo:
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
@@ -25,7 +29,7 @@ exporters:
       queue_size: 512
     retry_on_failure:
       max_elapsed_time: 30s
-  otlphttp/prometheus:
+  otlp_http/prometheus:
     metrics_endpoint: http://prometheus:9090/api/v1/otlp/v1/metrics
     tls:
       insecure: true
@@ -35,6 +39,7 @@ exporters:
       max_elapsed_time: 30s
 
 service:
+  extensions: [health_check]
   telemetry:
     logs:
       level: warn
@@ -49,8 +54,8 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlp/tempo]
+      exporters: [otlp_grpc/tempo]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/prometheus]
+      exporters: [otlp_http/prometheus]

@@ -1,6 +1,6 @@
 .PHONY: install ml-install hooks lint fmt run up down logs release data eda train \
 	tasks-file source workers worker-logs worker-health experiment \
-	reconfigure prefetch poison kill-worker \
+	reconfigure prefetch poison poison-retry kill-worker \
 	obs-up obs-down obs-wipe obs-logs obs-stats logs-up traces-up metrics-up
 
 WORKERS ?= 2
@@ -95,6 +95,14 @@ poison:
 	curl -s -u "$(RABBITMQ_AUTH)" -X POST "$(RABBITMQ_API)/exchanges/%2F/tasks/publish" \
 		-H 'content-type: application/json' \
 		-d '{"properties": {"delivery_mode": 2}, "routing_key": "score", "payload": "not a task", "payload_encoding": "string"}'
+	@echo
+
+POISON_FEATURES = {\"radiant_gold\": 13500, \"dire_gold\": 12400, \"gold_advantage\": 1100, \"radiant_xp\": 14200, \"dire_xp\": 13600, \"xp_advantage\": 600, \"radiant_lh\": 125, \"dire_lh\": 116, \"lh_advantage\": 9}
+
+poison-retry:
+	curl -s -u "$(RABBITMQ_AUTH)" -X POST "$(RABBITMQ_API)/exchanges/%2F/tasks/publish" \
+		-H 'content-type: application/json' \
+		-d '{"properties": {"delivery_mode": 2, "message_id": "poison-retry", "content_type": "application/json"}, "routing_key": "score", "payload_encoding": "string", "payload": "{\"task_id\": \"poison-retry\\u0000\", \"source\": \"batch\", \"published_at\": \"'"$$(date -u +%Y-%m-%dT%H:%M:%SZ)"'\", \"features\": $(POISON_FEATURES)}"}'
 	@echo
 
 kill-worker:

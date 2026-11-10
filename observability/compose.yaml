@@ -22,11 +22,18 @@ services:
       GOMEMLIMIT: 160MiB
     volumes:
       - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - *busybox-mount
     ports:
       - "127.0.0.1:${OTLP_GRPC_PORT:-4317}:4317"
       - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"
     networks:
       - observability
+    healthcheck:
+      test: ["CMD", "/bb/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13133/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
     mem_limit: 192m
     logging: *obs-logging
 
@@ -120,7 +127,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=${METRICS_RETENTION:-2d}
       - --web.enable-otlp-receiver
-      - --enable-feature=exemplar-storage
+      - --enable-feature=exemplar-storage,created-timestamp-zero-ingestion
     environment:
       GOMEMLIMIT: 200MiB
     volumes:
@@ -151,7 +158,6 @@ services:
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_PLUGINS_PREINSTALL_DISABLED: "true"
       GF_UNIFIED_ALERTING_EVALUATION_TIMEOUT: 20s
-      QUEUE_MAX_LENGTH: ${QUEUE_MAX_LENGTH:-100}
       GOMEMLIMIT: 300MiB
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

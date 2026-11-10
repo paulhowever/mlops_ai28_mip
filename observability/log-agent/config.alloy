@@ -14,27 +14,6 @@ discovery.relabel "project" {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
     target_label  = "service"
   }
-
-  rule {
-    source_labels = ["service"]
-    regex         = "app"
-    target_label  = "service"
-    replacement   = "dota-api"
-  }
-
-  rule {
-    source_labels = ["service"]
-    regex         = "worker"
-    target_label  = "service"
-    replacement   = "dota-worker"
-  }
-
-  rule {
-    source_labels = ["service"]
-    regex         = "source"
-    target_label  = "service"
-    replacement   = "dota-source"
-  }
 }
 
 loki.source.docker "project" {
@@ -53,6 +32,7 @@ loki.process "project" {
 
   stage.json {
     expressions = {
+      service  = "service",
       level    = "level",
       env      = "environment",
       task_id  = "task_id",
@@ -62,6 +42,7 @@ loki.process "project" {
 
   stage.labels {
     values = {
+      service = "",
       level   = "",
       env     = "",
     }

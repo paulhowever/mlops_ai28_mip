@@ -17,7 +17,7 @@ groups:
           severity: warning
           queue: tasks.score
         annotations:
-          summary: 'Очередь tasks.score заполнена более чем на 90% лимита x-max-length ({{ with $values.B }}{{ humanizePercentage .Value }}{{ end }} от 100)'
+          summary: 'Очередь tasks.score заполнена более чем на 90% лимита x-max-length ({{ with $values.B }}{{ humanizePercentage .Value }}{{ end }} от лимита)'
           description: 'Порог 90%: при 100% брокер начинает отклонять публикации (reject-publish), источник уходит в паузы, а API отвечает 503; 10% запаса хватает, чтобы вмешаться до отказов. Выдержка for=1m отсекает короткие всплески: при нормальном противодавлении очередь на секунды упирается в лимит, это не авария. Устойчивое заполнение дольше минуты означает, что воркеров не хватает или они остановлены. Оценивается глубина ready, потому что x-max-length считает именно готовые к выдаче сообщения.'
           runbook: 'Дашборд Конвейер: панели Глубина очереди и Пропускная способность воркеров. Добавьте воркер: make workers WORKERS=N.'
         data:
@@ -28,7 +28,7 @@ groups:
             datasourceUid: prometheus
             model:
               refId: A
-              expr: max(rabbitmq_detailed_queue_messages_ready{queue="tasks.score"}) / 100
+              expr: max(max_over_time(rabbitmq_detailed_queue_messages_ready{queue="tasks.score"}[30s])) / max(last_over_time(pipeline_queue_max_length[10m]))
               instant: true
               range: false
               intervalMs: 1000
