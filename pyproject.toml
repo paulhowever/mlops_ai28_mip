@@ -14,7 +14,13 @@ dependencies = [
     "pandas>=2.2.0",
     "scikit-learn>=1.5.0",
     "skops>=0.10.0",
-    "faststream[rabbit]>=0.7.7",
+    "faststream[otel,rabbit]>=0.7.7",
+    "opentelemetry-sdk>=1.38",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.38",
+    "opentelemetry-instrumentation-fastapi>=0.59b0",
+    "opentelemetry-instrumentation-asyncpg>=0.59b0",
+    "opentelemetry-instrumentation-httpx>=0.59b0",
+    "opentelemetry-instrumentation-system-metrics>=0.59b0",
 ]
 
 [dependency-groups]

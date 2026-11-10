@@ -1,0 +1,188 @@
+x-obs-logging: &obs-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+x-busybox-mount: &busybox-mount
+  type: image
+  source: ${BUSYBOX_IMAGE:-busybox:1.37.0-musl}
+  target: /bb
+  read_only: true
+  image:
+    subpath: bin
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTELCOL_VERSION:-0.165.0}
+    profiles: ["traces", "metrics", "observability"]
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      GOMEMLIMIT: 160MiB
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - *busybox-mount
+    ports:
+      - "127.0.0.1:${OTLP_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318"
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "/bb/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13133/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
+    mem_limit: 192m
+    logging: *obs-logging
+
+  tempo:
+    image: grafana/tempo:${TEMPO_VERSION:-2.10.10}
+    profiles: ["traces", "observability"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    environment:
+      GOMEMLIMIT: 200MiB
+    volumes:
+      - ./tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+      - *busybox-mount
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "/bb/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 6
+    mem_limit: 256m
+    logging: *obs-logging
+
+  loki:
+    image: grafana/loki:${LOKI_VERSION:-3.7.9}
+    profiles: ["logs", "observability"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    environment:
+      GOMEMLIMIT: 200MiB
+    volumes:
+      - ./loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+      - *busybox-mount
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "/bb/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+    mem_limit: 256m
+    logging: *obs-logging
+
+  alloy:
+    image: grafana/alloy:${ALLOY_VERSION:-v1.21.3}
+    profiles: ["logs", "observability"]
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      GOMEMLIMIT: 120MiB
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:?}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOKI_URL: http://loki:3100/loki/api/v1/push
+    volumes:
+      - ./log-agent/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    networks:
+      - observability
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/12345 && printf 'GET /-/ready HTTP/1.0\r\n\r\n' >&3 && head -n1 <&3 | grep -q ' 200 '
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 6
+    mem_limit: 160m
+    logging: *obs-logging
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.16.0}
+    profiles: ["metrics", "observability"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${METRICS_RETENTION:-2d}
+      - --web.enable-otlp-receiver
+      - --enable-feature=exemplar-storage,created-timestamp-zero-ingestion
+    environment:
+      GOMEMLIMIT: 200MiB
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 6
+    mem_limit: 256m
+    logging: *obs-logging
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-13.2.5}
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_UNIFIED_ALERTING_EVALUATION_TIMEOUT: 20s
+      GOMEMLIMIT: 300MiB
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+    mem_limit: 384m
+    logging: *obs-logging
+
+volumes:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:
+  alloy-data:
+
+networks:
+  observability:
+    driver: bridge

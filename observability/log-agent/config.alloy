@@ -1,0 +1,65 @@
+discovery.docker "project" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=" + sys.env("COMPOSE_PROJECT_NAME")]
+  }
+}
+
+discovery.relabel "project" {
+  targets = discovery.docker.project.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "project" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.project.output
+  forward_to = [loki.process.project.receiver]
+}
+
+loki.process "project" {
+  stage.static_labels {
+    values = {
+      env   = coalesce(sys.env("ENVIRONMENT"), "development"),
+      level = "unknown",
+    }
+  }
+
+  stage.json {
+    expressions = {
+      service  = "service",
+      level    = "level",
+      env      = "environment",
+      task_id  = "task_id",
+      trace_id = "trace_id",
+    }
+  }
+
+  stage.labels {
+    values = {
+      service = "",
+      level   = "",
+      env     = "",
+    }
+  }
+
+  stage.structured_metadata {
+    values = {
+      task_id  = "",
+      trace_id = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_URL")
+  }
+}

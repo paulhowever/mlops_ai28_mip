@@ -252,6 +252,36 @@ async def test_poison_and_failing_tasks_end_in_dlq(config, rabbitmq_url):
     await connection.close()
 
 
+async def test_poison_task_attempts_form_one_trace_through_retry_queue(
+    config, broker, rabbitmq_url, spans
+):
+    worker, _, tasks = await start_worker(config, BrokenPredictor())
+    assert await broker_client.publish_task(broker, message("batch:13"), 2.0)
+
+    async def dead() -> bool:
+        return await queue_depth(rabbitmq_url, broker_client.DEAD_LETTER_QUEUE_NAME) == 1
+
+    await eventually(dead)
+    await worker.stop()
+
+    finished = spans.get_finished_spans()
+    attempts = sorted(
+        (span for span in finished if span.name == "tasks.score process"),
+        key=lambda span: span.attributes["attempt"],
+    )
+    [publish] = [
+        span
+        for span in finished
+        if span.name == "tasks.score publish"
+        and span.attributes.get("messaging.rabbitmq.destination.routing_key") == "score"
+    ]
+    assert [span.attributes["attempt"] for span in attempts] == [1, 2, 3]
+    assert {span.context.trace_id for span in attempts} == {publish.context.trace_id}
+    assert [event.name for event in attempts[-1].events].count("dlq") == 1
+    assert all(span.status.status_code.name == "ERROR" for span in attempts)
+    assert tasks.failed["batch:13"]["attempt"] == config.max_attempts
+
+
 async def test_worker_takes_only_prefetch_count(config, broker, rabbitmq_url):
     for index in range(config.queue_max_length):
         assert await broker_client.publish_task(broker, message(f"batch:{index}"), 2.0)

@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from dota_winprob import __version__
 from dota_winprob.api import health, tasks, version
@@ -17,10 +18,12 @@ from dota_winprob.clients import broker as broker_client
 from dota_winprob.clients import opendota, postgres, tasks_repo
 from dota_winprob.config import Settings, get_settings
 from dota_winprob.logging_config import REQUEST_ID, setup_logging
+from dota_winprob.telemetry import excluded_urls, instrument_libraries, setup_telemetry
 
 log = logging.getLogger(__name__)
 
 REQUEST_ID_HEADER = "X-Request-ID"
+QUIET_PATHS = frozenset({health.LIVENESS_PATH, f"{health.v1_router.prefix}/health"})
 
 
 RECOVERABLE_ERRORS = (*broker_client.PUBLISH_ERRORS, OSError, asyncpg.PostgresError)
@@ -48,6 +51,7 @@ async def keep_trying(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
+    telemetry = setup_telemetry(settings)
     app.state.db_pool = await postgres.create_pool(settings)
     app.state.tasks = tasks_repo.TaskRepository(app.state.db_pool)
     app.state.opendota = opendota.create_client(settings)
@@ -74,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        log.info("Приложение останавливается")
         for task in background:
             task.cancel()
         await asyncio.gather(*background, return_exceptions=True)
@@ -81,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await opendota.close_client(app.state.opendota)
         await postgres.close_pool(app.state.db_pool)
         log.info("Приложение остановлено")
+        await asyncio.to_thread(telemetry.shutdown, settings.telemetry_shutdown_timeout)
 
 
 async def _call_next_or_500(
@@ -104,7 +110,7 @@ async def request_context(
     try:
         response = await _call_next_or_500(request, call_next)
         response.headers[REQUEST_ID_HEADER] = request_id
-        level = logging.DEBUG if request.url.path == health.LIVENESS_PATH else logging.INFO
+        level = logging.DEBUG if request.url.path in QUIET_PATHS else logging.INFO
         log.log(
             level,
             "Запрос обработан",
@@ -141,6 +147,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.v1_router)
     app.include_router(version.router)
     app.include_router(tasks.router)
+    instrument_libraries()
+    FastAPIInstrumentor.instrument_app(app, excluded_urls=excluded_urls())
     return app
 
 

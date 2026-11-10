@@ -1,0 +1,103 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: pipeline
+    folder: Конвейер
+    interval: 10s
+    rules:
+      - uid: queue-near-full
+        title: Очередь tasks.score заполнена более чем на 90%
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        isPaused: false
+        labels:
+          severity: warning
+          queue: tasks.score
+        annotations:
+          summary: 'Очередь tasks.score заполнена более чем на 90% лимита x-max-length ({{ with $values.B }}{{ humanizePercentage .Value }}{{ end }} от лимита)'
+          description: 'Порог 90%: при 100% брокер начинает отклонять публикации (reject-publish), источник уходит в паузы, а API отвечает 503; 10% запаса хватает, чтобы вмешаться до отказов. Выдержка for=1m отсекает короткие всплески: при нормальном противодавлении очередь на секунды упирается в лимит, это не авария. Устойчивое заполнение дольше минуты означает, что воркеров не хватает или они остановлены. Оценивается глубина ready, потому что x-max-length считает именно готовые к выдаче сообщения.'
+          runbook: 'Дашборд Конвейер: панели Глубина очереди и Пропускная способность воркеров. Добавьте воркер: make workers WORKERS=N.'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max(max_over_time(rabbitmq_detailed_queue_messages_ready{queue="tasks.score"}[30s])) / max(last_over_time(pipeline_queue_max_length[10m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings:
+                mode: dropNN
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0.9
+
+      - uid: dlq-not-empty
+        title: В очереди tasks.dlq есть сообщения
+        condition: C
+        for: 15s
+        noDataState: OK
+        execErrState: Error
+        isPaused: false
+        labels:
+          severity: critical
+          queue: tasks.dlq
+        annotations:
+          summary: 'В tasks.dlq {{ with $values.B }}{{ .Value }}{{ end }} сообщений: задачи, которые не удалось обработать'
+          description: 'Порог: больше 0, for=15s. В DLQ сообщения попадают только после исчерпания попыток или как нераспознанные, штатно очередь пуста и в ней никто не читает, поэтому единственное сообщение уже означает потерянную задачу и ложных срабатываний не даёт. Выдержка 15 с — три интервала скрейпа RabbitMQ по 5 с: она отсекает единичный выброс метрики при перезапуске брокера и почти не задерживает реакцию. Глубина, а не increase, потому что алерт должен гореть, пока сообщения не разобраны, и не гаснуть через окно rate при перезапуске Prometheus.'
+          runbook: 'Откройте логи level=ERROR на дашборде Конвейер, найдите task_id и трейс. После разбора очистите очередь в RabbitMQ Management.'
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max(rabbitmq_detailed_queue_messages_ready{queue="tasks.dlq"})
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings:
+                mode: dropNN
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 0

@@ -121,6 +121,25 @@ class Settings(BaseSettings):
         description="Имя экземпляра воркера в логах и в таблице задач.",
     )
 
+    otel_service_name: str | None = Field(
+        default=None,
+        description="Имя сервиса в телеметрии и в поле service логов. Без него — app_name.",
+    )
+    otel_sdk_disabled: bool = Field(
+        default=False,
+        description="Полностью выключает OpenTelemetry SDK: спаны и метрики не создаются.",
+    )
+    telemetry_shutdown_timeout: float = Field(
+        default=2.0,
+        gt=0,
+        description="Сколько секунд при остановке ждать отправки накопленной телеметрии.",
+    )
+    source_reject_log_interval: float = Field(
+        default=10.0,
+        gt=0,
+        description="Как часто источник пишет сводку об отказах брокера, секунды.",
+    )
+
     git_sha: str = "unknown"
     built_at: str = "unknown"
 
@@ -134,6 +153,10 @@ class Settings(BaseSettings):
         if self.worker_prefetch is None:
             return self.worker_concurrency
         return self.worker_prefetch
+
+    @property
+    def service_name(self) -> str:
+        return self.otel_service_name or self.app_name
 
     @property
     def inference_delay(self) -> float:
