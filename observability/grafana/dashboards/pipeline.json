@@ -482,7 +482,8 @@
           "expr": "histogram_quantile(0.95, sum by (le) (rate(pipeline_worker_inference_duration_seconds_bucket{instance=~\"$worker\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "refId": "B",
-          "editorMode": "code"
+          "editorMode": "code",
+          "exemplar": true
         },
         {
           "datasource": {

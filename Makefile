@@ -1,7 +1,7 @@
 .PHONY: install ml-install hooks lint fmt run up down logs release data eda train \
 	tasks-file source workers worker-logs worker-health experiment \
 	reconfigure prefetch poison poison-retry kill-worker \
-	obs-up obs-down obs-wipe obs-logs obs-stats logs-up traces-up metrics-up
+	obs-up bootstrap obs-down obs-wipe obs-logs obs-stats logs-up traces-up metrics-up
 
 WORKERS ?= 2
 
@@ -25,9 +25,10 @@ fmt:
 run:
 	uv run uvicorn dota_winprob.app:app --reload --port 8000
 
+BUILD_ENV = GIT_SHA=$$(git rev-parse --short HEAD) BUILT_AT=$$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
 up:
-	GIT_SHA=$$(git rev-parse --short HEAD) BUILT_AT=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-		docker compose up -d --build
+	$(BUILD_ENV) docker compose up -d --build
 
 down:
 	docker compose down
@@ -111,7 +112,13 @@ kill-worker:
 OBS_SERVICES = otel-collector alloy loki tempo prometheus grafana
 
 obs-up:
-	docker compose --profile observability up -d
+	$(BUILD_ENV) docker compose --profile observability up -d --build
+
+bootstrap: obs-up
+	$(MAKE) train
+	docker compose up -d --no-deps --force-recreate worker
+	@until [ "$$(docker inspect -f '{{.State.Health.Status}}' $$(docker compose ps -q worker | head -1))" = healthy ]; do sleep 3; done
+	@echo "воркер готов"
 
 obs-down:
 	docker compose --profile observability down
