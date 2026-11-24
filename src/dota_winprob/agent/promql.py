@@ -81,7 +81,7 @@ METRICS: dict[str, Metric] = {
     "worker_errors": Metric(
         'sum(rate(pipeline_worker_tasks_total{result=~"error|dlq"}[W]))',
         "задач/с",
-        "ошибки обработки и переводы в DLQ",
+        "неудачные попытки обработки, большинство уходит на повтор; переводы в DLQ считает dlq_transfers",
     ),
     "in_flight": Metric(
         "sum(pipeline_worker_in_flight)", "задач", "задачи в обработке по данным воркеров"

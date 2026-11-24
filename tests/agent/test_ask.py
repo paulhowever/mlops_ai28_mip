@@ -119,7 +119,8 @@ async def test_stubborn_invention_is_marked(make_agent_client):
     body = (await ask(client, "Кто победит?")).json()
 
     assert body["predictions"] == []
-    assert len(body["warnings"]) == 1
+    assert len(body["warnings"]) == 2
+    assert "90%" in body["warnings"][1]
 
 
 async def test_rejected_predict_is_told_honestly(make_agent_client, backends):
@@ -272,8 +273,42 @@ async def test_step_budget_stops_the_loop(make_agent_client):
     assert response.status_code == 200
     assert body["status"] == "step_limit"
     assert len(requests) == 8
-    assert len(body["steps"]) == 8
+    assert len(body["steps"]) == 7
     assert "бюджет шагов" in body["answer"]
+
+
+async def test_last_step_has_no_tools_and_must_answer(make_agent_client):
+    offered, notes = [], []
+
+    def curious(messages, info):
+        offered.append(len(info.function_tools))
+        notes.append("инструментов больше нет" in (info.instructions or ""))
+        return call("pipeline_status") if info.function_tools else say("По собранному: метрик нет")
+
+    client = await make_agent_client(curious, agent_step_budget=3)
+
+    body = (await ask(client)).json()
+
+    assert body["status"] == "ok"
+    assert body["answer"] == "По собранному: метрик нет"
+    assert [count > 0 for count in offered] == [True, True, False]
+    assert notes == [False, False, True]
+    assert len(body["steps"]) == 2
+
+
+async def test_number_out_of_thin_air_is_challenged_once(make_agent_client, backends):
+    backends.metrics = {'queue_messages_ready{queue="tasks.score"}': "97"}
+    answers = iter([say("В очереди 45 задач"), say("В очереди 97 задач")])
+
+    def script_(messages, info):
+        return next(answers) if tool_outputs(messages) else call("pipeline_status")
+
+    client = await make_agent_client(script_)
+
+    body = (await ask(client)).json()
+
+    assert body["answer"] == "В очереди 97 задач"
+    assert body["warnings"] == []
 
 
 async def test_tool_call_budget_stops_fan_out(make_agent_client, backends):

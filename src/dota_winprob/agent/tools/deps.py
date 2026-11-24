@@ -11,4 +11,5 @@ class AgentDeps:
     redactor: Redactor
     evidence: Evidence = field(default_factory=Evidence)
     steps: list[Step] = field(default_factory=list)
+    step_budget: int | None = None
     actions: list[ActionView] = field(default_factory=list)

@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from dota_winprob.agent.sources.http import HTTPSource
@@ -26,6 +27,39 @@ KEPT_FIELDS = (
     "suppressed",
 )
 EXCEPTION_TAIL = 400
+GROUP_TEXT = 160
+MAX_GROUPS = 8
+
+
+def _utc(stamp_ns: str) -> str:
+    return datetime.fromtimestamp(int(stamp_ns) / 1e9, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cause(record: dict[str, Any]) -> str:
+    text = str(record.get("error") or record.get("reason") or record.get("exception") or "")
+    return text.strip().rsplit("\n", 1)[-1][:GROUP_TEXT]
+
+
+def grouped(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, ...], dict[str, Any]] = {}
+    for item in entries:
+        message = str(item.get("message") or item.get("line") or "")[:GROUP_TEXT]
+        key = (str(item.get("service")), str(item.get("level")), message, _cause(item))
+        stamp = item.get("timestamp") or item.get("time")
+        group = groups.setdefault(
+            key,
+            {
+                "service": key[0],
+                "level": key[1],
+                "message": message,
+                "cause": key[3],
+                "count": 0,
+                "last": stamp,
+            },
+        )
+        group["count"] += 1
+        group["first"] = stamp
+    return sorted(groups.values(), key=lambda group: -group["count"])[:MAX_GROUPS]
 
 
 def entry(stream: dict[str, str], stamp_ns: str, line: str) -> dict[str, Any]:
@@ -35,7 +69,7 @@ def entry(stream: dict[str, str], stamp_ns: str, line: str) -> dict[str, Any]:
         record = None
     if not isinstance(record, dict):
         return {
-            "time_ns": stamp_ns,
+            "time": _utc(stamp_ns),
             "service": stream.get("service"),
             "level": stream.get("level"),
             "line": line,

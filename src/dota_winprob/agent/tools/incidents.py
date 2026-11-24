@@ -1,15 +1,21 @@
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from dota_winprob.agent import queries, spans
 from dota_winprob.agent.envelope import ToolResult
 from dota_winprob.agent.errors import ToolInputError
-from dota_winprob.agent.sources.loki import Loki
+from dota_winprob.agent.sources.loki import Loki, grouped
 from dota_winprob.agent.sources.tasks_db import TasksReader
 from dota_winprob.agent.sources.tempo import Tempo
 from dota_winprob.agent.tools.monitoring import Minutes
+
+SCAN_LINES = 300
+NO_FAILED = (
+    "статус failed не записывается, если сбой был в самом Postgres: проверь dlq_ready в pipeline_status "
+    "и search_logs service=dota-worker level=WARNING"
+)
 
 LogService = Literal[
     "dota-api",
@@ -58,14 +64,22 @@ class IncidentTools:
             ),
         ] = None,
         minutes: Minutes = 15,
-        limit: Limit = 20,
+        limit: Limit = 10,
     ) -> ToolResult:
         query = queries.logql(service, level, task_id, text)
-        entries = await self.loki.search(query, minutes, limit)
-        data = {"minutes": minutes, "order": "сначала новые", "entries": entries}
-        if not entries:
+        found = await self.loki.search(query, minutes, SCAN_LINES)
+        data: dict[str, Any] = {
+            "minutes": minutes,
+            "scanned": len(found),
+            "scan_limit_reached": len(found) >= SCAN_LINES,
+            "groups": grouped(found),
+            "order": "сначала новые",
+            "entries": found[:limit],
+        }
+        if not found:
             return ToolResult("loki", data, f"за {minutes} мин записей нет", "empty")
-        return ToolResult("loki", data, f"записей: {len(entries)} за {minutes} мин")
+        more = " или больше" if data["scan_limit_reached"] else ""
+        return ToolResult("loki", data, f"записей: {len(found)}{more} за {minutes} мин")
 
     async def get_task(self, task_id: TaskId) -> ToolResult:
         task_id = queries.task_id(task_id)
@@ -84,6 +98,7 @@ class IncidentTools:
         totals = await self.tasks.totals()
         data = {"totals_by_status": totals, "order": "сначала новые", "tasks": rows}
         if not rows:
+            data["note"] = NO_FAILED
             return ToolResult("postgres", data, "задач failed нет", "empty")
         return ToolResult("postgres", data, f"failed всего {totals.get('failed', len(rows))}")
 

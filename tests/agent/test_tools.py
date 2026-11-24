@@ -62,8 +62,8 @@ async def test_metric_history_compresses_series(run_tool, backends):
 
     assert (data["min"], data["max"], data["last"]) == (0, 99, 79)
     assert data["measured_points"] == 180
-    assert len(data["points_unix_time_value"]) <= 20
-    assert data["points_unix_time_value"][-1] == [179, 79]
+    assert len(data["points_utc_time_value"]) <= 20
+    assert data["points_utc_time_value"][-1] == ["00:02:59Z", 79]
     assert step.status == "ok"
     form = backends.form("prometheus")
     assert form["step"] == "5"
@@ -126,7 +126,8 @@ async def test_search_logs_returns_newest_first_without_unknown_fields(run_tool,
     assert form["query"] == (
         '{service="dota-worker", level=~"ERROR|CRITICAL"} | task_id="batch:566"'
     )
-    assert form["limit"] == "5"
+    assert form["limit"] == "300"
+    assert [group["count"] for group in data["groups"]] == [1, 1]
     assert backends.calls("loki")[0].url.query == b""
 
 
@@ -472,3 +473,23 @@ async def test_every_tool_is_described(agent_settings, sources, actions):
     from dota_winprob.agent.tools.catalog import build_toolset
 
     assert set(build_toolset(agent_settings, sources, actions).tools) == set(DESCRIPTIONS)
+
+
+async def test_repeated_log_lines_are_grouped(run_tool, backends):
+    backends.log_streams = [
+        stream(
+            *[log_line("Задача отправлена на повтор", error="Connection refused")] * 40,
+            log_line("Очередь повторов не приняла задачу", error="Connection refused"),
+        )
+    ]
+
+    data, step, _ = await run_tool("search_logs", service="dota-worker", level="WARNING", limit=3)
+
+    assert [(group["message"], group["count"]) for group in data["groups"]] == [
+        ("Задача отправлена на повтор", 40),
+        ("Очередь повторов не приняла задачу", 1),
+    ]
+    assert data["groups"][0]["cause"] == "Connection refused"
+    assert len(data["entries"]) == 3
+    assert data["scanned"] == 41
+    assert step.summary == "записей: 41 за 15 мин"

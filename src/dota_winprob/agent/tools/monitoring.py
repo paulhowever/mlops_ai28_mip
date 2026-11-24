@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from pydantic import Field
@@ -24,8 +25,11 @@ STATUS_METRICS: tuple[str, ...] = (
     "consumers",
     "dlq_ready",
     "source_rate",
+    "source_rejections",
+    "source_wait_share",
     "worker_rate",
     "worker_errors",
+    "api_rate",
     "api_503_share",
     "inference_p95",
     "queue_wait_p95",
@@ -41,14 +45,24 @@ def rounded(value: float | None) -> float | None:
     return None if value is None else round(value, 4)
 
 
-def downsample(points: list[Point]) -> list[list[float]]:
+def clock_time(stamp: float) -> str:
+    return datetime.fromtimestamp(round(stamp), UTC).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def downsample(points: list[Point]) -> list[list[str | float]]:
     if not points:
         return []
     count = min(MAX_POINTS, len(points))
     last = len(points) - 1
     indexes = {round(index * last / max(1, count - 1)) for index in range(count)}
     indexes.add(last)
-    return [[round(points[index][0]), round(points[index][1], 4)] for index in sorted(indexes)]
+    return [
+        [clock_time(points[index][0])[11:], round(points[index][1], 4)] for index in sorted(indexes)
+    ]
+
+
+def _by_value(point: Point) -> float:
+    return point[1]
 
 
 @dataclass(frozen=True)
@@ -74,6 +88,7 @@ class MonitoringTools:
             for name, value in current.items()
         ]
         data: dict[str, Any] = {
+            "measured_at": clock_time(self.prometheus.clock()),
             "rate_window_s": STATUS_WINDOW_S,
             "queue_fill_share": rounded(ready / limit) if ready is not None and limit else None,
             "note": "null означает, что за окно данных нет, это не ноль",
@@ -106,13 +121,18 @@ class MonitoringTools:
         if not points:
             return ToolResult("prometheus", data, f"{name}: точек за окно нет", "empty")
         values = [value for _, value in points]
+        lowest, highest = min(points, key=_by_value), max(points, key=_by_value)
         data |= {
-            "min": rounded(min(values)),
-            "max": rounded(max(values)),
+            "from": clock_time(points[0][0]),
+            "to": clock_time(points[-1][0]),
+            "min": rounded(lowest[1]),
+            "min_at": clock_time(lowest[0]),
+            "max": rounded(highest[1]),
+            "max_at": clock_time(highest[0]),
             "avg": rounded(sum(values) / len(values)),
             "last": rounded(values[-1]),
             "measured_points": len(points),
-            "points_unix_time_value": downsample(points),
+            "points_utc_time_value": downsample(points),
         }
         summary = (
             f"{name} за {minutes} мин: min {data['min']}, max {data['max']}, last {data['last']}"

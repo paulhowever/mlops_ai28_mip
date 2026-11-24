@@ -70,6 +70,7 @@ class MatchTools:
                 for key in METRIC_KEYS
                 if key in values and math.isfinite(values[key])
             },
+            "metrics_unit": "доли от 0 до 1, не проценты; accuracy 0.65 означает 65%",
             "inputs": "суммы золота, опыта и добиваний команд на 10-й минуте и их разности",
             "output": "вероятность победы Radiant",
         }

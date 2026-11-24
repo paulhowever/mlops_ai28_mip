@@ -39,7 +39,7 @@ x-otel-env: &otel-env
 services:
   app:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     restart: unless-stopped
     command:
       - sh
@@ -79,7 +79,7 @@ services:
 
   worker:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     command:
       - sh
       - -c
@@ -125,7 +125,7 @@ services:
 
   source:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     profiles: ["batch"]
     command:
       - sh
@@ -178,7 +178,7 @@ services:
 
   agent:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     profiles: ["agent"]
     restart: unless-stopped
     command:

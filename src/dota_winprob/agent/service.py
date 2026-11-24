@@ -28,9 +28,12 @@ from dota_winprob.agent.images import Image
 from dota_winprob.agent.llm.client import model_settings
 from dota_winprob.agent.prompt import (
     INSTRUCTIONS,
+    LAST_STEP,
     STEP_LIMIT_ANSWER,
     UNGROUNDED_RETRY,
     UNGROUNDED_WARNING,
+    UNKNOWN_NUMBERS_RETRY,
+    UNKNOWN_NUMBERS_WARNING,
 )
 from dota_winprob.agent.redaction import Redactor
 from dota_winprob.agent.schemas import AnswerStatus, AskRequest, AskResponse, Step, Turn, Usage
@@ -42,7 +45,7 @@ from dota_winprob.agent.tools.catalog import (
     build_toolset,
 )
 from dota_winprob.agent.tools.deps import AgentDeps
-from dota_winprob.agent.tools.guard import GuardedToolset
+from dota_winprob.agent.tools.guard import GuardedToolset, last_step
 from dota_winprob.agent.tracing import current_trace_id
 
 log = logging.getLogger(__name__)
@@ -65,13 +68,28 @@ class Analysis:
     warnings: list[str]
 
 
+def _exhausted(ctx: RunContext[AgentDeps]) -> bool:
+    budget = ctx.deps.step_budget
+    return budget is not None and ctx.usage.requests >= budget
+
+
+def closing_note(ctx: RunContext[AgentDeps]) -> str | None:
+    return LAST_STEP if last_step(ctx) and ctx.deps.steps else None
+
+
 async def require_grounded(ctx: RunContext[AgentDeps], answer: str) -> str:
     evidence = ctx.deps.evidence
-    claims = evidence.ungrounded(answer)
-    if claims and not evidence.challenged:
-        evidence.challenged = True
+    if evidence.challenged or _exhausted(ctx):
+        return answer
+    complaints = []
+    if claims := evidence.ungrounded(answer):
         shown = ", ".join(f"{claim:.2f}" for claim in claims)
-        raise ModelRetry(UNGROUNDED_RETRY.format(claims=shown))
+        complaints.append(UNGROUNDED_RETRY.format(claims=shown))
+    if numbers := evidence.unknown_numbers(answer):
+        complaints.append(UNKNOWN_NUMBERS_RETRY.format(numbers=", ".join(numbers)))
+    if complaints:
+        evidence.challenged = True
+        raise ModelRetry("\n".join(complaints))
     return answer
 
 
@@ -94,6 +112,7 @@ def build_agent(
         model_settings=model_settings(settings),
         retries={"tools": ARGUMENT_RETRIES, "output": OUTPUT_RETRIES},
     )
+    agent.instructions(closing_note)
     agent.output_validator(require_grounded)
     return agent
 
@@ -163,7 +182,8 @@ class AgentService:
         if self.agents is None:
             raise LLMNotConfigured
         deps = AgentDeps(redactor=self.redactor)
-        deps.evidence.allow(question)
+        for text in (INSTRUCTIONS, question):
+            deps.evidence.allow(text)
         status, answer = await self._run(
             self.agents.observer,
             question,
@@ -182,7 +202,7 @@ class AgentService:
             raise LLMNotConfigured
         question = self.redactor.text(request.question)
         deps = AgentDeps(redactor=self.redactor)
-        for text in (question, *(turn.content for turn in request.history)):
+        for text in (INSTRUCTIONS, question, *(turn.content for turn in request.history)):
             deps.evidence.allow(text)
         usage = RunUsage()
         status, answer = await self._run(
@@ -227,6 +247,7 @@ class AgentService:
         steps: int,
         timeout_s: float,
     ) -> tuple[AnswerStatus, str]:
+        deps.step_budget = steps
         try:
             run = await agent.run(
                 prompt,
@@ -253,7 +274,10 @@ class AgentService:
 
 
 def _warnings(deps: AgentDeps, answer: str) -> list[str]:
-    return [UNGROUNDED_WARNING] if deps.evidence.ungrounded(answer) else []
+    warnings = [UNGROUNDED_WARNING] if deps.evidence.ungrounded(answer) else []
+    if numbers := deps.evidence.unknown_numbers(answer):
+        warnings.append(UNKNOWN_NUMBERS_WARNING.format(numbers=", ".join(numbers)))
+    return warnings
 
 
 def _binary(image: Image) -> BinaryContent:

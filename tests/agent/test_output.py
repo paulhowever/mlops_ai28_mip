@@ -174,3 +174,43 @@ def test_number_from_question_may_be_repeated():
     collected.allow("Правда, что вероятность 90%?")
 
     assert collected.ungrounded("Нет, вероятность 90% ничем не подтверждена") == []
+
+
+SHOWN = '{"queue_ready": 97.0, "source_rate": 18.4226, "inference_p95": 0.2463, "gold_advantage": -717, "accuracy": 0.649, "id": "f3ed4f41ff0a"}'
+
+
+def shown_evidence():
+    collected = Evidence()
+    collected.allow("Что если у Dire на 3000 золота больше, в матче batch:566?")
+    collected.collect("pipeline_status", {}, SHOWN)
+    return collected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Очередь 97 из-за источника 18,4 задач/с (pipeline_status)",
+        "p95 inference 246 мс, то есть 0.246 с",
+        "Отставание Radiant 717 золота после добавки 3 000",
+        "Точность 64,9%",
+        "Воркер f3ed4f41ff0a, задача batch:566, с 10:12:40 до 2026-11-24 10:13:55Z",
+        "1. Проверить логи\n2. Запустить make workers WORKERS=2",
+        "",
+    ],
+)
+def test_numbers_from_tools_are_known(text):
+    assert shown_evidence().unknown_numbers(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "numbers"),
+    [
+        ("Перевес около 900 пунктов", ["900"]),
+        ("Точность 0.649%", ["0.649%"]),
+        ("Очередь 45, повторяю: 45", ["45"]),
+        ("Источник 18.9 задач/с", ["18.9"]),
+        ("Ждать 12 500 секунд", ["12500"]),
+    ],
+)
+def test_numbers_out_of_thin_air_are_found(text, numbers):
+    assert shown_evidence().unknown_numbers(text) == numbers

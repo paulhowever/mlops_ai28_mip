@@ -25,11 +25,19 @@ MAX_ARGUMENT = 200
 FAILED_STATUSES = frozenset({"unavailable", "timeout", "malformed"})
 
 
+def last_step(ctx: RunContext[AgentDeps]) -> bool:
+    budget = ctx.deps.step_budget
+    return budget is not None and ctx.usage.requests >= budget - 1
+
+
 @dataclass
 class GuardedToolset(WrapperToolset[AgentDeps]):
     timeouts: dict[str, float]
     default_timeout: float
     output_chars: int
+
+    async def get_tools(self, ctx: RunContext[AgentDeps]) -> dict[str, ToolsetTool[AgentDeps]]:
+        return {} if last_step(ctx) else await super().get_tools(ctx)
 
     async def call_tool(
         self,
@@ -60,8 +68,9 @@ class GuardedToolset(WrapperToolset[AgentDeps]):
             step.summary = clip(deps.redactor.text(result.summary), MAX_SUMMARY)
             if result.action is not None:
                 deps.actions.append(result.action)
-            deps.evidence.collect(name, result.data)
-            return render(name, result, deps.redactor, self.output_chars)
+            shown = render(name, result, deps.redactor, self.output_chars)
+            deps.evidence.collect(name, result.data, shown)
+            return shown
 
     async def _safely(
         self,
