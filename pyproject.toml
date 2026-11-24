@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-instrumentation-asyncpg>=0.59b0",
     "opentelemetry-instrumentation-httpx>=0.59b0",
     "opentelemetry-instrumentation-system-metrics>=0.59b0",
+    "pydantic-ai-slim[openai]>=2.73.0",
 ]
 
 [dependency-groups]

@@ -30,9 +30,11 @@ HTTP_SERVER_DURATION = "http.server.request.duration"
 MESSAGING_DURATION = "messaging.*.duration"
 INFERENCE_DURATION = "pipeline.worker.inference.duration"
 QUEUE_WAIT = "pipeline.worker.queue_wait"
+AGENT_DURATION = "agent.*.duration"
 
 LATENCY_BUCKETS = (0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 QUEUE_WAIT_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0)
+AGENT_BUCKETS = (0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 240.0)
 INFERENCE_OFFSETS = (0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0)
 INFERENCE_FACTORS = (1.0, 2.0, 5.0)
 
@@ -84,6 +86,10 @@ def metric_views(settings: Settings) -> list[View]:
         View(
             instrument_name=QUEUE_WAIT,
             aggregation=ExplicitBucketHistogramAggregation(QUEUE_WAIT_BUCKETS),
+        ),
+        View(
+            instrument_name=AGENT_DURATION,
+            aggregation=ExplicitBucketHistogramAggregation(AGENT_BUCKETS),
         ),
     ]
 
