@@ -158,6 +158,8 @@ services:
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_PLUGINS_PREINSTALL_DISABLED: "true"
       GF_UNIFIED_ALERTING_EVALUATION_TIMEOUT: 20s
+      AGENT_ALERTS_URL: ${AGENT_ALERTS_URL:-http://agent:8010/agent/alerts}
+      AGENT_ALERTS_TOKEN: ${AGENT_ALERTS_TOKEN:-local-alerts}
       GOMEMLIMIT: 300MiB
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
