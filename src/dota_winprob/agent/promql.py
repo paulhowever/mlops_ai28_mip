@@ -11,6 +11,7 @@ MetricName = Literal[
     "dlq_transfers",
     "source_rate",
     "worker_rate",
+    "worker_duplicates",
     "worker_errors",
     "in_flight",
     "source_rejections",
@@ -74,9 +75,14 @@ METRICS: dict[str, Metric] = {
         "sum(rate(pipeline_source_published_total[W]))", "задач/с", "скорость источника"
     ),
     "worker_rate": Metric(
-        'sum(rate(pipeline_worker_tasks_total{result="ok"}[W]))',
+        'sum(rate(pipeline_worker_tasks_total{result=~"ok|duplicate"}[W]))',
         "задач/с",
-        "пропускная способность воркеров",
+        "пропускная способность воркеров: посчитанные задачи, новые и дубли вместе",
+    ),
+    "worker_duplicates": Metric(
+        'sum(rate(pipeline_worker_tasks_total{result="duplicate"}[W]))',
+        "задач/с",
+        "часть worker_rate: дубли, результат которых уже был в Postgres (например, повторный запуск источника)",
     ),
     "worker_errors": Metric(
         'sum(rate(pipeline_worker_tasks_total{result=~"error|dlq"}[W]))',

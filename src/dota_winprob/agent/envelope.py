@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -12,6 +13,8 @@ MAX_RAW_STRING = 2000
 MAX_STRING = 600
 MAX_SUMMARY = 200
 OMITTED = "omitted_items"
+FORGED = "[поддельный тег удалён]"
+_FORGED_TAG = re.compile(rf"<\s*/?\s*{OPEN_TAG}[^>]{{0,300}}>?", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,10 @@ class ToolResult:
     summary: str = ""
     status: str = "ok"
     action: ActionView | None = None
+
+
+def without_envelope(text: str) -> str:
+    return _FORGED_TAG.sub(FORGED, text)
 
 
 def clip(text: str, limit: int) -> str:

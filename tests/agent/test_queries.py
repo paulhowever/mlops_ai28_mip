@@ -117,7 +117,14 @@ def test_metric_queries_match_dashboard():
         for target in panel.get("targets", [])
         if "expr" in target
     }
-    own = {"consumers", "worker_errors", "in_flight", "api_rate"}
+    own = {
+        "consumers",
+        "worker_rate",
+        "worker_errors",
+        "worker_duplicates",
+        "in_flight",
+        "api_rate",
+    }
     for name, metric in METRICS.items():
         if name not in own:
             assert metric.expression in expressions, name

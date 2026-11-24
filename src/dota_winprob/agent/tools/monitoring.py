@@ -28,6 +28,7 @@ STATUS_METRICS: tuple[str, ...] = (
     "source_rejections",
     "source_wait_share",
     "worker_rate",
+    "worker_duplicates",
     "worker_errors",
     "api_rate",
     "api_503_share",

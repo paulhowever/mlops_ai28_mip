@@ -1,6 +1,6 @@
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from opentelemetry import trace
@@ -23,10 +23,13 @@ from pydantic_ai.usage import RunUsage
 from dota_winprob.agent import metrics
 from dota_winprob.agent.actions.service import ActionService
 from dota_winprob.agent.config import SERVICE_NAME, AgentSettings
+from dota_winprob.agent.envelope import without_envelope
 from dota_winprob.agent.errors import AskError, LLMFailed, LLMNotConfigured, QuestionTimeout
 from dota_winprob.agent.images import Image
 from dota_winprob.agent.llm.client import model_settings
 from dota_winprob.agent.prompt import (
+    BORROWED_RETRY,
+    BORROWED_WARNING,
     INSTRUCTIONS,
     LAST_STEP,
     STEP_LIMIT_ANSWER,
@@ -85,6 +88,9 @@ async def require_grounded(ctx: RunContext[AgentDeps], answer: str) -> str:
     if claims := evidence.ungrounded(answer):
         shown = ", ".join(f"{claim:.2f}" for claim in claims)
         complaints.append(UNGROUNDED_RETRY.format(claims=shown))
+    if claims := evidence.borrowed(answer):
+        shown = ", ".join(f"{claim:.4g}" for claim in claims)
+        complaints.append(BORROWED_RETRY.format(claims=shown))
     if numbers := evidence.unknown_numbers(answer):
         complaints.append(UNKNOWN_NUMBERS_RETRY.format(numbers=", ".join(numbers)))
     if complaints:
@@ -126,10 +132,10 @@ def build_agents(
     )
 
 
-def to_messages(history: Sequence[Turn], redactor: Redactor) -> list[ModelMessage]:
+def to_messages(history: Sequence[Turn], clean: Callable[[str], str]) -> list[ModelMessage]:
     messages: list[ModelMessage] = []
     for turn in history:
-        content = redactor.text(turn.content)
+        content = clean(turn.content)
         if turn.role == "user":
             messages.append(ModelRequest(parts=[UserPromptPart(content)]))
         else:
@@ -178,6 +184,9 @@ class AgentService:
                     extra={"result": result, "duration_s": round(duration, 3)},
                 )
 
+    def _clean(self, text: str) -> str:
+        return without_envelope(self.redactor.text(text))
+
     async def analyze(self, question: str) -> Analysis:
         if self.agents is None:
             raise LLMNotConfigured
@@ -200,7 +209,7 @@ class AgentService:
     async def _answer(self, request: AskRequest, span: Span) -> AskResponse:
         if self.agents is None:
             raise LLMNotConfigured
-        question = self.redactor.text(request.question)
+        question = self._clean(request.question)
         deps = AgentDeps(redactor=self.redactor)
         for text in (INSTRUCTIONS, question, *(turn.content for turn in request.history)):
             deps.evidence.allow(text)
@@ -251,7 +260,7 @@ class AgentService:
         try:
             run = await agent.run(
                 prompt,
-                message_history=to_messages(history, self.redactor),
+                message_history=to_messages(history, self._clean),
                 deps=deps,
                 usage=usage,
                 usage_limits=UsageLimits(
@@ -275,6 +284,8 @@ class AgentService:
 
 def _warnings(deps: AgentDeps, answer: str) -> list[str]:
     warnings = [UNGROUNDED_WARNING] if deps.evidence.ungrounded(answer) else []
+    if deps.evidence.borrowed(answer):
+        warnings.append(BORROWED_WARNING)
     if numbers := deps.evidence.unknown_numbers(answer):
         warnings.append(UNKNOWN_NUMBERS_WARNING.format(numbers=", ".join(numbers)))
     return warnings

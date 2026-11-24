@@ -79,6 +79,7 @@ def claimed_quantities(text: str) -> list[Quantity]:
 
 
 def all_numbers(text: str) -> set[float]:
+    text = _CLOCK.sub(" ", text)
     spaceless = re.sub(r"(?<=\d)[ \u00a0\u202f](?=\d{3}(?!\d))", "", text)
     return {float(raw) for raw in _NUMBER_LIKE.findall(spaceless.replace(",", "."))} | {
         float(raw) for raw in _NUMBER_LIKE.findall(text)
@@ -93,6 +94,7 @@ def mentioned(text: str) -> set[float]:
 class Evidence:
     predictions: list[Prediction] = field(default_factory=list)
     other: set[float] = field(default_factory=set)
+    asked: set[float] = field(default_factory=set)
     numbers: set[float] = field(default_factory=set)
     challenged: bool = False
 
@@ -111,16 +113,11 @@ class Evidence:
             self.other.update((data.get("metrics") or {}).values())
 
     def allow(self, text: str) -> None:
-        self.other |= mentioned(text)
+        self.asked |= mentioned(text)
         self.numbers |= all_numbers(text)
 
     def unknown_numbers(self, text: str) -> list[str]:
-        known = self.numbers | {p.win_probability for p in self.predictions}
-        known |= {1 - p.win_probability for p in self.predictions}
-        known |= {
-            abs(left.win_probability - right.win_probability)
-            for left, right in combinations(self.predictions, 2)
-        }
+        known = self.numbers | self._probabilities()
         missing = [
             claim.text
             for claim in claimed_quantities(text)
@@ -129,12 +126,22 @@ class Evidence:
         return list(dict.fromkeys(missing))
 
     def ungrounded(self, text: str) -> list[float]:
+        return _unmatched(text, self.other | self.asked | self._probabilities())
+
+    def borrowed(self, text: str) -> list[float]:
+        foreign = _unmatched(text, self.other | self._probabilities())
+        unknown = self.ungrounded(text)
+        return [claim for claim in foreign if claim not in unknown]
+
+    def _probabilities(self) -> set[float]:
         known = [prediction.win_probability for prediction in self.predictions]
-        allowed = self.other | set(known)
-        allowed |= {1 - value for value in known}
-        allowed |= {abs(left - right) for left, right in combinations(known, 2)}
-        return [
-            claim
-            for claim in claimed_probabilities(text)
-            if not any(abs(claim - value) <= TOLERANCE for value in allowed)
-        ]
+        differences = {abs(left - right) for left, right in combinations(known, 2)}
+        return set(known) | {1 - value for value in known} | differences
+
+
+def _unmatched(text: str, allowed: set[float]) -> list[float]:
+    return [
+        claim
+        for claim in claimed_probabilities(text)
+        if not any(abs(claim - value) <= TOLERANCE for value in allowed)
+    ]

@@ -17,6 +17,8 @@ PROVIDER_NAME = "llm-gateway"
 PROFILE = OpenAIModelProfile(
     openai_supports_strict_tool_definition=False,
     openai_chat_supports_max_completion_tokens=False,
+    supports_inline_system_prompts=False,
+    openai_chat_supports_multiple_system_messages=False,
 )
 
 pydantic_ai.BANNER_ENABLED = False
