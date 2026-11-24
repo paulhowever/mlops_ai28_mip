@@ -68,7 +68,13 @@ class FakeBackends:
 
     def _tempo(self, request):
         if request.url.path == "/api/search":
-            return httpx.Response(200, json={"traces": self.found_traces})
+            end = int(request.url.params["end"]) * 10**9
+            found = sorted(
+                (item for item in self.found_traces if int(item["startTimeUnixNano"]) <= end),
+                key=lambda item: int(item["startTimeUnixNano"]),
+                reverse=True,
+            )
+            return httpx.Response(200, json={"traces": found[: int(request.url.params["limit"])]})
         trace = self.traces.get(request.url.path.rsplit("/", 1)[-1])
         return httpx.Response(404) if trace is None else httpx.Response(200, json=trace)
 

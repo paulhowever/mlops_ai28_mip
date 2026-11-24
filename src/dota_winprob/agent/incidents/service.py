@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 ANALYZE_SPAN = "analyze_incident"
-FACT_CHARS = 1500
+FACT_CHARS = 2500
 SUMMARY_CHARS = 300
 FACT_MINUTES = 15
 FACT_LIMIT = 5
@@ -45,6 +45,7 @@ DEAD_LETTERS = "tasks.dlq"
 OVERFLOW = "очередь разборов полна"
 RESOLVED_EARLY = "алерт погас до разбора"
 CRASHED = "разбор прерван ошибкой"
+RETRIED = frozenset({AnalysisStatus.failed, AnalysisStatus.skipped})
 STOPPED = "агент остановлен до конца разбора"
 
 
@@ -97,13 +98,22 @@ class IncidentService:
         incident = self.store.latest(alert.fingerprint)
         if incident is not None and incident.status is IncidentStatus.firing:
             self.store.repeat(incident)
+            if self._unexplained(incident):
+                return self._enqueue(incident, "repeated")
             return "repeated"
         if incident is not None and self.store.cooling(incident):
             self.store.repeat(incident)
             return "cooldown"
         return self._enqueue(self.store.open(alert))
 
-    def _enqueue(self, incident: Incident) -> str:
+    def _unexplained(self, incident: Incident) -> bool:
+        return (
+            incident.analysis.status in RETRIED
+            and not self.store.cooling(incident)
+            and not self._queue.full()
+        )
+
+    def _enqueue(self, incident: Incident, accepted: str = "opened") -> str:
         try:
             self._queue.put_nowait(incident)
         except asyncio.QueueFull:
@@ -111,7 +121,8 @@ class IncidentService:
                 incident, IncidentAnalysis(status=AnalysisStatus.skipped, reason=OVERFLOW), 0.0
             )
             return "overflow"
-        return "opened"
+        incident.analysis.status, incident.analysis.reason = AnalysisStatus.queued, None
+        return accepted
 
     async def _work(self) -> None:
         while True:

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import asyncpg
 import pytest
 from testcontainers.community.postgres import PostgresContainer
@@ -11,12 +13,23 @@ from tests.test_integration_pipeline import POSTGRES_IMAGE, docker_available
 pytestmark = pytest.mark.integration
 
 
+ROLE_SQL = Path(__file__).parents[2] / "docker" / "agent-role.sql"
+ROLE_PASSWORD = "pa'ss$1"
+
+
 @pytest.fixture(scope="module")
-def database_url():
+def container():
     if not docker_available():
         pytest.skip("Docker недоступен")
-    with PostgresContainer(POSTGRES_IMAGE, driver=None) as container:
-        yield container.get_connection_url()
+    with PostgresContainer(POSTGRES_IMAGE, driver=None).with_volume_mapping(
+        str(ROLE_SQL), "/agent-role.sql", "ro"
+    ) as running:
+        yield running
+
+
+@pytest.fixture(scope="module")
+def database_url(container):
+    return container.get_connection_url()
 
 
 @pytest.fixture
@@ -74,3 +87,42 @@ async def test_injection_is_only_a_value(pools):
 
     assert await tasks.task("x' OR '1'='1") is None
     assert await tasks.task("batch:9") is not None
+
+
+async def test_role_cannot_write_even_with_read_only_mode_off(pools, container):
+    writer, _ = pools
+    await tasks_repo.ensure_schema(writer)
+    apply = ["psql", "-q", "-U", container.username, "-d", container.dbname]
+    apply += ["-v", "ON_ERROR_STOP=1", "-v", f"password={ROLE_PASSWORD}", "-f", "/agent-role.sql"]
+    for _ in range(2):
+        result = container.exec(apply)
+        assert result.exit_code == 0, result.output
+    agent = await asyncpg.connect(
+        host=container.get_container_host_ip(),
+        port=int(container.get_exposed_port(5432)),
+        user="dota_agent",
+        password=ROLE_PASSWORD,
+        database=container.dbname,
+    )
+    try:
+        with pytest.raises(asyncpg.ReadOnlySQLTransactionError):
+            await agent.execute("DELETE FROM tasks")
+        await agent.execute("SET default_transaction_read_only = off")
+
+        assert await agent.fetchval("SELECT count(*) FROM tasks") >= 0
+        for statement in (
+            "INSERT INTO tasks (task_id) VALUES ('x')",
+            "UPDATE tasks SET status = 'pending'",
+            "DELETE FROM tasks",
+            "TRUNCATE tasks",
+            "DROP TABLE tasks",
+            "CREATE TABLE public.other (id int)",
+            "CREATE ROLE other",
+            "SELECT passwd FROM pg_shadow",
+            "SELECT pg_read_file('/etc/passwd')",
+            "COPY tasks TO PROGRAM 'id'",
+        ):
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await agent.execute(statement)
+    finally:
+        await agent.close()

@@ -74,8 +74,8 @@ async def test_metric_history_window_is_not_shorter_than_step(run_tool, backends
     await run_tool("metric_history", name="worker_rate", minutes=1440)
 
     form = backends.form("prometheus")
-    assert form["step"] == "432"
-    assert "[432s]" in form["query"]
+    assert form["step"] == "8"
+    assert "[60s]" in form["query"]
 
 
 async def test_metric_history_without_points_is_empty(run_tool):
@@ -320,7 +320,36 @@ async def test_get_trace_prefers_processing_that_wrote_result(
     assert data["trace_id"] == ids.pop(expected)
     assert data["other_trace_ids"] == list(ids.values())
     assert data["started_at"] == "1970-01-01T00:00:01+00:00"
+    notes = {None: "время записи результата неизвестно", 50: "не найден"}
+    assert notes.get(completed_s, "после которого записан результат") in data["note"]
+
+
+async def test_get_trace_finds_original_behind_many_republications(run_tool, backends, pool):
+    original = "ab" * 16
+    backends.found_traces = [{"traceID": original, "startTimeUnixNano": str(100 * 10**9)}] + [
+        {"traceID": f"{index:032x}", "startTimeUnixNano": str(index * 1000 * 10**9)}
+        for index in range(1, 9)
+    ]
+    backends.traces = {original: trace_payload()}
+    pool.rows = [task_row(completed_at=datetime.fromtimestamp(150.5, UTC))]
+
+    data, _, _ = await run_tool("get_trace", task_id="batch:5000")
+
+    assert data["trace_id"] == original
     assert "несколько раз" in data["note"]
+    assert len(data["other_trace_ids"]) == 5
+
+
+async def test_get_trace_warns_when_only_a_later_publication_is_left(run_tool, backends, pool):
+    backends.found_traces = [{"traceID": "cd" * 16, "startTimeUnixNano": str(200 * 10**9)}]
+    backends.traces = {"cd" * 16: trace_payload()}
+    pool.rows = [task_row(completed_at=datetime.fromtimestamp(150, UTC))]
+
+    data, _, _ = await run_tool("get_trace", task_id="batch:5000")
+
+    assert data["trace_id"] == "cd" * 16
+    assert "не найден" in data["note"]
+    assert "other_trace_ids" not in data
 
 
 async def test_get_trace_survives_database_down(run_tool, backends, pool):
@@ -530,3 +559,15 @@ async def test_repeated_log_lines_are_grouped(run_tool, backends):
     assert len(data["entries"]) == 3
     assert data["scanned"] == 41
     assert step.summary == "записей: 41 за 15 мин"
+
+
+@pytest.mark.parametrize(("minutes", "step"), [(15, 5), (200, 5), (1440, 8)])
+async def test_history_step_does_not_hide_short_peaks(run_tool, backends, minutes, step):
+    backends.ranges = {"tasks.score": [[1, "0"], [9, "100"], [17, "0"]]}
+
+    data, _, _ = await run_tool("metric_history", name="queue_ready", minutes=minutes)
+
+    assert backends.form("prometheus")["step"] == str(step)
+    assert minutes * 60 / step + 1 <= 11_000
+    assert data["max"] == 100.0
+    assert data["measured_every_s"] == step

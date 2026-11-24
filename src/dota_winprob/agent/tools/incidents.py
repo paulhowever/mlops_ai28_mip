@@ -22,6 +22,14 @@ REPUBLISHED = (
     "задачу публиковали несколько раз: показан трейс, после которого записан результат, остальные — в "
     "other_trace_ids"
 )
+UNMATCHED = (
+    "задачу публиковали несколько раз, время записи результата неизвестно: показана последняя публикация, "
+    "остальные — в other_trace_ids"
+)
+DUPLICATE = (
+    "трейс, после которого записан результат, не найден: показана более поздняя повторная публикация, "
+    "её время ожидания и обработки к записанному результату не относится"
+)
 
 LogService = Literal[
     "dota-api",
@@ -116,31 +124,40 @@ class IncidentTools:
         task_id: TaskId | None = None,
     ) -> ToolResult:
         others: list[str] = []
+        note: str | None = None
         if trace_id is not None:
             chosen = queries.trace_id(trace_id)
         elif task_id is not None:
-            chosen, *others = await self._traces_of(queries.task_id(task_id)) or [None]
+            found, note = await self._traces_of(queries.task_id(task_id))
+            chosen, *others = found or [None]
         else:
             raise ToolInputError("нужен trace_id или task_id")
         payload = await self.tempo.fetch(chosen) if chosen else None
         if payload is None:
             return ToolResult("tempo", {"found": False}, "трейс не найден", "empty")
         data = spans.tree(chosen, payload)
+        if note:
+            data = {"note": note, **data}
         if others:
-            data = {"note": REPUBLISHED, **data, "other_trace_ids": others}
+            data["other_trace_ids"] = others
         if not data["spans"]:
             return ToolResult("tempo", data, "трейс пуст", "empty")
         summary = f"спанов {data['span_count']}, ошибок {data['error_count']}, всего {data['total_ms']} мс"
         return ToolResult("tempo", data, summary)
 
-    async def _traces_of(self, task_id: str) -> list[str]:
-        found = await self.tempo.find_by_task(task_id)
-        if len(found) > 1:
-            completed = await self._completed_at(task_id)
-            if completed is not None:
-                completed_ns = completed.timestamp() * 1e9
-                found.sort(key=lambda trace: trace.started_ns > completed_ns)
-        return [trace.trace_id for trace in found]
+    async def _traces_of(self, task_id: str) -> tuple[list[str], str | None]:
+        completed = await self._completed_at(task_id)
+        latest = await self.tempo.find_by_task(task_id)
+        if completed is None:
+            return [trace.trace_id for trace in latest], UNMATCHED if len(latest) > 1 else None
+        completed_ns = int(completed.timestamp() * 1e9)
+        until = await self.tempo.find_by_task(task_id, completed)
+        ids = [trace.trace_id for trace in until if trace.started_ns <= completed_ns]
+        note = DUPLICATE if latest and not ids else None
+        ids += [trace.trace_id for trace in latest if trace.trace_id not in ids]
+        if len(ids) > 1 and note is None:
+            note = REPUBLISHED
+        return ids, note
 
     async def _completed_at(self, task_id: str) -> datetime | None:
         try:

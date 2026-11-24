@@ -141,7 +141,7 @@ class LLMGate:
         return ticket
 
     def _next_start(self, now: float, tokens: int, is_background: bool) -> float:
-        while self._tickets and self._tickets[0].counted_at <= now - PERIOD:
+        while self._tickets and self._tickets[0].counted_at + PERIOD <= now:
             self._tickets.popleft()
         earliest = max(now, self._not_before)
         if self._tickets:
@@ -158,14 +158,13 @@ class LLMGate:
         )
 
     def _fits(self, moment: float, tokens: int, is_background: bool) -> bool:
-        border = moment - PERIOD
         groups = [(list(self._tickets), self._limit, self._token_limit)]
         if is_background:
             own = [ticket for ticket in self._tickets if ticket.background]
             groups.append((own, self._background_limit, self._background_tokens))
         for tickets, limit, token_limit in groups:
-            requests = sum(ticket.start > border for ticket in tickets)
-            spent = sum(ticket.tokens for ticket in tickets if ticket.counted_at > border)
+            requests = sum(ticket.start + PERIOD > moment for ticket in tickets)
+            spent = sum(ticket.tokens for ticket in tickets if ticket.counted_at + PERIOD > moment)
             if requests >= limit or (spent and spent + tokens > token_limit):
                 return False
         return True

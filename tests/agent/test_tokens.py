@@ -70,6 +70,19 @@ async def test_never_more_than_limit_in_any_minute():
         assert sum(t for moment, t in spent if start <= moment < start + 60) <= 1000
 
 
+async def test_full_window_survives_float_rounding_of_the_clock():
+    for index in range(500):
+        clock = Clock()
+        clock.now = 32768 - 60 + index * 0.1234567
+        gate = make_gate(clock, requests_per_minute=1, queue_timeout=1e6)
+        await spend(gate, 1)
+        clock.now += 1e-3 * index
+
+        await spend(gate, 1)
+
+        assert len(clock.slept) == 1
+
+
 async def test_request_above_the_whole_limit_waits_for_empty_window():
     clock = Clock()
     gate = make_gate(clock, tokens_per_minute=1000)

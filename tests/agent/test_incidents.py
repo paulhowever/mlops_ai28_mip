@@ -8,6 +8,7 @@ from dota_winprob.agent.errors import LLMBusy
 from dota_winprob.agent.incidents.models import Alert, AlertsPayload
 from dota_winprob.agent.incidents.store import IncidentStore
 from dota_winprob.agent.redaction import Redactor
+from dota_winprob.agent.tools.monitoring import STATUS_METRICS
 from tests.agent.fakes import TEST_KEY, call, log_line, say, script, stream, task_row
 from tests.agent.test_ask import ask, points
 from tests.agent.test_llm import Clock
@@ -231,6 +232,50 @@ async def test_flapping_alert_waits_for_cooldown(make):
 
     assert len(asked) == 2
     assert [item["status"] for item in await incidents(client)] == ["firing", "resolved"]
+
+
+async def test_burning_alert_is_explained_after_gateway_failure(make):
+    asked = []
+
+    def respond(messages, info):
+        asked.append(1)
+        if len(asked) == 1:
+            raise LLMBusy(retry_after=5)
+        return say("готово")
+
+    client, service = await make(respond)
+    clock = service.store._clock = Clock()
+    await send(client, alert())
+    await service.drain()
+    assert (await incidents(client))[0]["analysis"]["status"] == "failed"
+
+    early = await send(client, alert())
+    await service.drain()
+    assert (early.json()["repeated"], len(asked)) == (1, 1)
+
+    clock.now += 601
+    late = await send(client, alert())
+    await service.drain()
+
+    [incident] = await incidents(client)
+    assert late.json()["repeated"] == 1
+    assert incident["analysis"]["status"] == "done"
+    assert incident["repeats"] == 2
+
+
+async def test_incident_prompt_keeps_every_status_metric(make, backends):
+    backends.metrics = {"": 37.8287}
+    prompts = []
+
+    def respond(messages, info):
+        prompts.append(str(messages[0].parts[0].content))
+        return say("готово")
+
+    client, service = await make(respond)
+    await send(client, alert())
+    await service.drain()
+
+    assert [name for name in STATUS_METRICS if f'"{name}"' not in prompts[0]] == []
 
 
 async def test_resolved_closes_and_unknown_is_ignored(make):

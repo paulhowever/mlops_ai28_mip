@@ -12,7 +12,7 @@ from dota_winprob.agent.sources.prometheus import Point, Prometheus
 
 STATUS_WINDOW_S = 60
 MIN_STEP_S = 5
-FINE_POINTS = 200
+FINE_POINTS = 10_000
 MAX_POINTS = 20
 MAX_MINUTES = 24 * 60
 MIN_WINDOW_S = 60
@@ -133,6 +133,7 @@ class MonitoringTools:
             "avg": rounded(sum(values) / len(values)),
             "last": rounded(values[-1]),
             "measured_points": len(points),
+            "measured_every_s": step,
             "points_utc_time_value": downsample(points),
         }
         summary = (

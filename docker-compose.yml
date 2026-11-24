@@ -184,7 +184,7 @@ services:
     command:
       - sh
       - -c
-      - export OTEL_RESOURCE_ATTRIBUTES="$$OTEL_RESOURCE_ATTRIBUTES,service.instance.id=$$(hostname)"; exec uvicorn dota_winprob.agent.app:app --host 0.0.0.0 --port 8010 --no-access-log --no-server-header
+      - export OTEL_RESOURCE_ATTRIBUTES="$$OTEL_RESOURCE_ATTRIBUTES,service.instance.id=$$(hostname)"; exec uvicorn dota_winprob.agent.app:app --host 0.0.0.0 --port 8010 --timeout-graceful-shutdown 5 --no-access-log --no-server-header
     environment:
       <<: *otel-env
       OTEL_SERVICE_NAME: dota-agent

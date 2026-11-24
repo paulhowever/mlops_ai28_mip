@@ -1,6 +1,8 @@
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from dota_winprob.agent import queries
@@ -21,8 +23,8 @@ class Tempo(HTTPSource):
     ready_path = "/ready"
     clock: Callable[[], float] = staticmethod(time.time)
 
-    async def find_by_task(self, task_id: str) -> list[FoundTrace]:
-        end = int(self.clock())
+    async def find_by_task(self, task_id: str, until: datetime | None = None) -> list[FoundTrace]:
+        end = int(self.clock()) if until is None else math.ceil(until.timestamp())
         body = await self.json(
             "GET",
             "/api/search",
