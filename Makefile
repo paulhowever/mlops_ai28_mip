@@ -1,6 +1,7 @@
 .PHONY: install ml-install hooks lint fmt run up down logs release data eda train \
 	tasks-file source workers worker-logs worker-health experiment \
 	reconfigure prefetch poison poison-retry kill-worker \
+	agent-up agent-down agent-logs ask \
 	obs-up bootstrap obs-down obs-wipe obs-logs obs-stats logs-up traces-up metrics-up
 
 WORKERS ?= 2
@@ -109,6 +110,24 @@ poison-retry:
 kill-worker:
 	docker kill $$(docker compose ps -q worker | head -1)
 
+agent-up:
+	$(BUILD_ENV) docker compose --profile agent up -d --build agent
+	@echo "страница агента: http://localhost:$${AGENT_PORT:-8010}"
+
+agent-down:
+	docker compose --profile agent down agent agent-db
+
+agent-logs:
+	docker compose --profile agent logs -f agent
+
+ask: export QUESTION = $(value Q)
+ask:
+	@test -n "$$QUESTION" || { echo 'использование: make ask Q="Что с очередью?"'; exit 1; }
+	@python3 -c 'import json, os; print(json.dumps({"question": os.environ["QUESTION"]}))' \
+		| curl -sS --max-time 300 -H 'Content-Type: application/json' --data-binary @- \
+			"http://127.0.0.1:$${AGENT_PORT:-8010}/agent/ask" \
+		| python3 -m json.tool --no-ensure-ascii
+
 OBS_SERVICES = otel-collector alloy loki tempo prometheus grafana
 
 obs-up:
@@ -121,10 +140,10 @@ bootstrap: obs-up
 	@echo "воркер готов"
 
 obs-down:
-	docker compose --profile observability down
+	docker compose --profile agent --profile observability down
 
 obs-wipe:
-	docker compose --profile observability down --volumes
+	docker compose --profile agent --profile observability down --volumes
 
 logs-up:
 	docker compose --profile logs up -d
