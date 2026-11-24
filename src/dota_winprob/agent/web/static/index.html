@@ -1,1 +1,58 @@
 <!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Агент конвейера</title>
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="top">
+      <h1>Агент конвейера</h1>
+      <p id="model" class="muted"></p>
+      <span id="state" class="badge" role="status">проверяю…</span>
+    </header>
+    <main class="layout">
+      <section class="chat" aria-label="Диалог с агентом">
+        <div id="log" class="log" role="log" aria-live="polite">
+          <div id="welcome" class="welcome">
+            <p>Спросите про очередь, воркеры, ошибки, DLQ, задачу или матч. Можно вставить скриншот графика.</p>
+            <div id="examples" class="examples"></div>
+          </div>
+        </div>
+        <form id="form" class="composer">
+          <div id="preview" class="preview" hidden>
+            <img id="thumb" alt="Прикреплённая картинка">
+            <span id="imageName" class="muted"></span>
+            <button id="dropImage" type="button" class="ghost">Убрать</button>
+          </div>
+          <label class="hidden" for="question">Вопрос агенту</label>
+          <textarea id="question" rows="3" placeholder="Вопрос агенту. Enter — отправить, Shift+Enter — новая строка, картинку можно вставить из буфера"></textarea>
+          <div class="controls">
+            <label class="file ghost">
+              Картинка
+              <input id="file" type="file" accept="image/png,image/jpeg">
+            </label>
+            <button id="reset" type="button" class="ghost">Новый диалог</button>
+            <span id="hint" class="muted hint" role="status"></span>
+            <button id="send" type="submit" class="primary">Спросить</button>
+          </div>
+        </form>
+      </section>
+      <aside class="side" aria-label="Действия и инциденты">
+        <section class="card">
+          <h2>Действия</h2>
+          <div id="actions" class="stack"></div>
+        </section>
+        <section class="card">
+          <h2>Инциденты</h2>
+          <div id="incidents" class="stack"></div>
+        </section>
+      </aside>
+    </main>
+    <noscript>Страница работает на JavaScript. Без него доступны команда make ask и HTTP API.</noscript>
+  </body>
+</html>
