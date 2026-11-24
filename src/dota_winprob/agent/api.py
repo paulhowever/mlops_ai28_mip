@@ -6,7 +6,9 @@ from fastapi.responses import JSONResponse
 from dota_winprob.agent.errors import AskError
 from dota_winprob.agent.health import collect_probes
 from dota_winprob.agent.schemas import AskRequest, AskResponse, ErrorResponse
-from dota_winprob.agent.service import AgentService, current_trace_id
+from dota_winprob.agent.security import ASK_PATH
+from dota_winprob.agent.service import AgentService
+from dota_winprob.agent.tracing import current_trace_id
 from dota_winprob.schemas import HealthReport, LivenessResponse
 from dota_winprob.services.health import build_report
 
@@ -14,7 +16,6 @@ log = logging.getLogger(__name__)
 
 LIVENESS_PATH = "/healthz"
 HEALTH_PATH = "/health"
-ASK_PATH = "/agent/ask"
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ async def health(request: Request) -> HealthReport:
     return await build_report(
         collect_probes(
             state.sources,
-            llm_configured=state.service.agent is not None,
+            llm_configured=state.service.configured,
             model=state.agent_settings.llm_model,
         ),
         probe_timeout=state.settings.health_probe_timeout,

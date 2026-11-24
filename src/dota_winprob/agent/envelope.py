@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from dota_winprob.agent.actions.models import ActionView
 from dota_winprob.agent.redaction import Redactor
 
 OPEN_TAG = "untrusted_tool_output"
@@ -19,6 +20,7 @@ class ToolResult:
     data: dict[str, Any] = field(default_factory=dict)
     summary: str = ""
     status: str = "ok"
+    action: ActionView | None = None
 
 
 def clip(text: str, limit: int) -> str:

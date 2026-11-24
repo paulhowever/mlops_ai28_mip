@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
 
 from dota_winprob.agent import app as agent_app
 from dota_winprob.agent.prompt import INSTRUCTIONS
+from tests.agent.conftest import BASE_URL
 from tests.agent.fakes import (
     TEST_KEY,
     call,
@@ -161,7 +162,7 @@ async def test_unknown_tool_does_not_break_the_answer(make_agent_client):
     assert response.json()["steps"] == []
 
 
-async def test_only_read_tools_and_predict_are_offered(make_agent_client):
+async def test_offered_tools_are_fixed(make_agent_client):
     offered = []
 
     def respond(messages, info):
@@ -180,6 +181,7 @@ async def test_only_read_tools_and_predict_are_offered(make_agent_client):
         "model_card",
         "pipeline_status",
         "predict",
+        "requeue_dlq",
         "search_logs",
     ]
 
@@ -542,7 +544,7 @@ async def test_real_client_end_to_end_without_network(
     async with (
         agent_app.lifespan(application),
         httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application), base_url="http://testserver"
+            transport=httpx.ASGITransport(app=application), base_url=BASE_URL
         ) as client,
     ):
         response = await ask(client, "Что с batch:566?")

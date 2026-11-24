@@ -26,6 +26,7 @@ from pydantic_ai.settings import ModelSettings
 
 from dota_winprob.agent import metrics
 from dota_winprob.agent.errors import LLMBusy, LLMFailed, LLMUnavailable
+from dota_winprob.agent.llm.estimate import estimate_tokens
 from dota_winprob.agent.llm.gate import LLMGate
 
 log = logging.getLogger(__name__)
@@ -74,12 +75,15 @@ class GuardedModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         attempt = 1
+        estimate = estimate_tokens(messages, model_settings, model_request_parameters)
         while True:
             try:
-                async with self._gate.slot():
-                    return await self._attempt(
+                async with self._gate.slot(estimate) as ticket:
+                    response = await self._attempt(
                         attempt, messages, model_settings, model_request_parameters
                     )
+                    ticket.settle(response.usage.total_tokens)
+                    return response
             except RETRYABLE as error:
                 delay = self._retry_delay(error, attempt)
             except ModelAPIError as error:

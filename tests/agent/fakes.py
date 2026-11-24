@@ -6,6 +6,8 @@ from urllib.parse import parse_qs
 import httpx
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 
+from dota_winprob.agent.sources.dead_letters import DeadTask, Inspection, Returned
+
 TEST_KEY = "unit-test-key-0000"
 
 
@@ -85,6 +87,38 @@ class FakeBackends:
             return httpx.Response(404, json={"detail": "Задача не найдена"})
         view = self.views.pop(0) if len(self.views) > 1 else self.views[0]
         return httpx.Response(200, json=view)
+
+
+def dead_task(task_id, digest="a", source="batch", reason="rejected", attempts=3):
+    return DeadTask((task_id, digest), source, reason, attempts)
+
+
+class FakeDeadLetters:
+    def __init__(self):
+        self.tasks = [dead_task("batch:1"), dead_task("batch:2")]
+        self.garbage = 1
+        self.error = None
+        self.inspected = 0
+        self.requeued = []
+        self.outcome = None
+        self.gate = None
+
+    async def inspect(self):
+        self.inspected += 1
+        if self.error is not None:
+            raise self.error
+        depth = len(self.tasks) + self.garbage
+        return Inspection(depth, depth, self.garbage, list(self.tasks))
+
+    async def requeue(self, planned):
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.error is not None:
+            raise self.error
+        self.requeued.append(planned)
+        if self.outcome is not None:
+            return self.outcome
+        return Returned([task_id for task_id, _ in planned.elements()], left=self.garbage)
 
 
 class Connection:

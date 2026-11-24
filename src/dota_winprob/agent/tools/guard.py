@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from opentelemetry import trace
@@ -56,6 +58,8 @@ class GuardedToolset(WrapperToolset[AgentDeps]):
             if result.status in FAILED_STATUSES:
                 span.set_status(Status(StatusCode.ERROR, result.status))
             step.summary = clip(deps.redactor.text(result.summary), MAX_SUMMARY)
+            if result.action is not None:
+                deps.actions.append(result.action)
             deps.evidence.collect(name, result.data)
             return render(name, result, deps.redactor, self.output_chars)
 
@@ -66,29 +70,39 @@ class GuardedToolset(WrapperToolset[AgentDeps]):
         ctx: RunContext[AgentDeps],
         tool: ToolsetTool[AgentDeps],
     ) -> ToolResult:
-        timeout = self.timeouts.get(name, self.default_timeout)
-        try:
-            async with asyncio.timeout(timeout):
-                return await super().call_tool(name, tool_args, ctx, tool)
-        except ToolInputError as error:
-            return _failure("agent", "invalid_input", str(error))
-        except SourceUnavailable as error:
-            self._report(name, "unavailable", error.source, error.reason)
-            return _failure(
-                error.source, "unavailable", f"источник {error.source} недоступен: {error.reason}"
-            )
-        except TimeoutError:
-            self._report(name, "timeout", name, "TimeoutError")
-            return _failure("agent", "timeout", f"инструмент не уложился в {timeout:g} с")
-        except MALFORMED as error:
-            self._report(name, "malformed", name, type(error).__name__)
-            return _failure("agent", "malformed", "источник вернул ответ в неожиданном формате")
-
-    def _report(self, tool: str, status: str, source: str, reason: str) -> None:
-        log.warning(
-            "Инструмент не получил данные",
-            extra={"tool": tool, "result": status, "source": source, "reason": reason},
+        return await safely(
+            name,
+            partial(super().call_tool, name, tool_args, ctx, tool),
+            self.timeouts.get(name, self.default_timeout),
         )
+
+
+async def safely(
+    name: str, call: Callable[[], Awaitable[ToolResult]], timeout_s: float
+) -> ToolResult:
+    try:
+        async with asyncio.timeout(timeout_s):
+            return await call()
+    except ToolInputError as error:
+        return _failure("agent", "invalid_input", str(error))
+    except SourceUnavailable as error:
+        _report(name, "unavailable", error.source, error.reason)
+        return _failure(
+            error.source, "unavailable", f"источник {error.source} недоступен: {error.reason}"
+        )
+    except TimeoutError:
+        _report(name, "timeout", name, "TimeoutError")
+        return _failure("agent", "timeout", f"инструмент не уложился в {timeout_s:g} с")
+    except MALFORMED as error:
+        _report(name, "malformed", name, type(error).__name__)
+        return _failure("agent", "malformed", "источник вернул ответ в неожиданном формате")
+
+
+def _report(tool: str, status: str, source: str, reason: str) -> None:
+    log.warning(
+        "Инструмент не получил данные",
+        extra={"tool": tool, "result": status, "source": source, "reason": reason},
+    )
 
 
 def _failure(source: str, status: str, message: str) -> ToolResult:

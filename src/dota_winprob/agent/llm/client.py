@@ -38,6 +38,9 @@ def build_gate(settings: AgentSettings) -> LLMGate:
         requests_per_minute=settings.llm_requests_per_minute,
         max_waiting=settings.llm_max_waiting,
         queue_timeout=settings.llm_queue_timeout,
+        tokens_per_minute=settings.llm_tokens_per_minute,
+        background_share=settings.llm_background_share,
+        background_timeout=settings.llm_background_timeout,
     )
 
 

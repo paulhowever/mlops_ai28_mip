@@ -13,7 +13,9 @@ from dota_winprob.logging_config import REQUEST_ID
 log = logging.getLogger("dota_winprob.app")
 
 REQUEST_ID_HEADER = "X-Request-ID"
-QUIET_PATHS = frozenset({"/healthz", "/health", "/api/v1/health"})
+QUIET_PATHS = frozenset(
+    {"/healthz", "/health", "/api/v1/health", "/agent/actions", "/agent/incidents"}
+)
 
 
 async def _call_next_or_500(

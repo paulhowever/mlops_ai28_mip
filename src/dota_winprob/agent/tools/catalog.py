@@ -1,7 +1,13 @@
+from collections.abc import Awaitable, Callable
+
 from pydantic_ai import FunctionToolset, Tool
 
+from dota_winprob.agent.actions.models import REQUEUE_DLQ
+from dota_winprob.agent.actions.service import ActionService
 from dota_winprob.agent.config import AgentSettings
+from dota_winprob.agent.envelope import ToolResult
 from dota_winprob.agent.sources.bundle import Sources
+from dota_winprob.agent.tools.actions import ActionTools
 from dota_winprob.agent.tools.deps import AgentDeps
 from dota_winprob.agent.tools.incidents import IncidentTools
 from dota_winprob.agent.tools.matches import MatchTools
@@ -40,13 +46,56 @@ DESCRIPTIONS = {
         "код, передавать их не нужно. Для сравнения «что если» вызови инструмент дважды. "
         "Статус rejected значит, что очередь полна и задача не создана."
     ),
+    REQUEUE_DLQ: (
+        "Осматривает DLQ и создаёт предложение вернуть валидные задачи в рабочую очередь. Сам ничего "
+        "не возвращает: выполнит код после того, как человек нажмёт «Подтвердить». Вызывай, когда "
+        "человек просит вернуть, переобработать или разобрать задачи из DLQ."
+    ),
 }
 
 
-def build_toolset(settings: AgentSettings, sources: Sources) -> FunctionToolset[AgentDeps]:
+def _as_tool(function: Callable[..., Awaitable[ToolResult]]) -> Tool[AgentDeps]:
+    return Tool(
+        function,
+        takes_ctx=False,
+        name=function.__name__,
+        description=DESCRIPTIONS[function.__name__],
+        max_retries=ARGUMENT_RETRIES,
+    )
+
+
+def build_read_toolset(settings: AgentSettings, sources: Sources) -> FunctionToolset[AgentDeps]:
     monitoring = MonitoringTools(sources.prometheus)
     incidents = IncidentTools(sources.loki, sources.tempo, sources.tasks)
-    matches = MatchTools(
+    matches = _match_tools(settings, sources)
+    return FunctionToolset(
+        [
+            _as_tool(function)
+            for function in (
+                monitoring.pipeline_status,
+                monitoring.metric_history,
+                incidents.search_logs,
+                incidents.get_task,
+                incidents.failed_tasks,
+                incidents.get_trace,
+                matches.model_card,
+                matches.match_features,
+            )
+        ]
+    )
+
+
+def build_toolset(
+    settings: AgentSettings, sources: Sources, actions: ActionService
+) -> FunctionToolset[AgentDeps]:
+    toolset = build_read_toolset(settings, sources)
+    toolset.add_tool(_as_tool(_match_tools(settings, sources).predict))
+    toolset.add_tool(_as_tool(ActionTools(actions).requeue_dlq))
+    return toolset
+
+
+def _match_tools(settings: AgentSettings, sources: Sources) -> MatchTools:
+    return MatchTools(
         api=sources.api,
         mlflow=sources.mlflow,
         matches=sources.matches,
@@ -54,27 +103,4 @@ def build_toolset(settings: AgentSettings, sources: Sources) -> FunctionToolset[
         model_alias=settings.model_alias,
         predict_timeout=settings.agent_predict_timeout,
         poll_interval=settings.agent_predict_poll_interval,
-    )
-    functions = (
-        monitoring.pipeline_status,
-        monitoring.metric_history,
-        incidents.search_logs,
-        incidents.get_task,
-        incidents.failed_tasks,
-        incidents.get_trace,
-        matches.model_card,
-        matches.match_features,
-        matches.predict,
-    )
-    return FunctionToolset(
-        [
-            Tool(
-                function,
-                takes_ctx=False,
-                name=function.__name__,
-                description=DESCRIPTIONS[function.__name__],
-                max_retries=ARGUMENT_RETRIES,
-            )
-            for function in functions
-        ]
     )

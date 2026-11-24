@@ -36,3 +36,25 @@ llm_in_flight = meter.create_up_down_counter(
     "agent.llm.in_flight",
     description="Запросы к шлюзу прямо сейчас.",
 )
+
+actions = meter.create_counter(
+    "agent.actions",
+    description="Предложения по действию и результату: proposed, confirmed, rejected, expired, done, partial, failed.",
+)
+returned_tasks = meter.create_counter(
+    "agent.actions.returned_tasks",
+    description="Задачи, возвращённые из DLQ в рабочую очередь.",
+)
+alerts = meter.create_counter(
+    "agent.alerts",
+    description="Алерты из webhook по результату: opened, repeated, cooldown, resolved, unknown, overflow.",
+)
+incidents = meter.create_counter(
+    "agent.incidents",
+    description="Разборы инцидентов по результату: done, facts_only, failed, skipped.",
+)
+incident_duration = meter.create_histogram(
+    "agent.incident.duration",
+    unit="s",
+    description="Длительность фонового разбора инцидента.",
+)

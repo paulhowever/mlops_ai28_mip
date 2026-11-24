@@ -84,14 +84,21 @@ async def test_metric_history_without_points_is_empty(run_tool):
     assert step.status == "empty"
 
 
-async def test_unknown_metric_never_reaches_prometheus(agent_settings, sources, deps, backends):
+async def test_unknown_metric_never_reaches_prometheus(
+    agent_settings, sources, actions, deps, backends
+):
     from pydantic_ai.models.function import FunctionModel
 
     from dota_winprob.agent.service import build_agent
+    from dota_winprob.agent.tools.catalog import build_toolset
     from tests.agent.fakes import call, say
 
     turns = [call("metric_history", name="up} or vector(1)"), say("готово")]
-    agent = build_agent(agent_settings, sources, FunctionModel(lambda m, i: turns.pop(0)))
+    agent = build_agent(
+        agent_settings,
+        build_toolset(agent_settings, sources, actions),
+        FunctionModel(lambda m, i: turns.pop(0)),
+    )
 
     await agent.run("вопрос", deps=deps)
 
@@ -461,7 +468,7 @@ async def test_slow_tool_is_cut(run_tool, sources, agent_settings, monkeypatch):
     assert step.duration_ms < 5000
 
 
-async def test_every_tool_is_described(agent_settings, sources):
+async def test_every_tool_is_described(agent_settings, sources, actions):
     from dota_winprob.agent.tools.catalog import build_toolset
 
-    assert set(build_toolset(agent_settings, sources).tools) == set(DESCRIPTIONS)
+    assert set(build_toolset(agent_settings, sources, actions).tools) == set(DESCRIPTIONS)

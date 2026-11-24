@@ -8,18 +8,23 @@ from opentelemetry.trace import Span, Status, StatusCode
 from pydantic_ai import Agent, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.exceptions import AgentRunError, RunTimedOut, UsageLimitExceeded
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
     TextPart,
+    UserContent,
     UserPromptPart,
 )
 from pydantic_ai.models import Model
+from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
 from dota_winprob.agent import metrics
+from dota_winprob.agent.actions.service import ActionService
 from dota_winprob.agent.config import SERVICE_NAME, AgentSettings
 from dota_winprob.agent.errors import AskError, LLMFailed, LLMNotConfigured, QuestionTimeout
+from dota_winprob.agent.images import Image
 from dota_winprob.agent.llm.client import model_settings
 from dota_winprob.agent.prompt import (
     INSTRUCTIONS,
@@ -28,11 +33,17 @@ from dota_winprob.agent.prompt import (
     UNGROUNDED_WARNING,
 )
 from dota_winprob.agent.redaction import Redactor
-from dota_winprob.agent.schemas import AnswerStatus, AskRequest, AskResponse, Turn, Usage
+from dota_winprob.agent.schemas import AnswerStatus, AskRequest, AskResponse, Step, Turn, Usage
 from dota_winprob.agent.sources.bundle import Sources
-from dota_winprob.agent.tools.catalog import ARGUMENT_RETRIES, PREDICT, build_toolset
+from dota_winprob.agent.tools.catalog import (
+    ARGUMENT_RETRIES,
+    PREDICT,
+    build_read_toolset,
+    build_toolset,
+)
 from dota_winprob.agent.tools.deps import AgentDeps
 from dota_winprob.agent.tools.guard import GuardedToolset
+from dota_winprob.agent.tracing import current_trace_id
 
 log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -41,9 +52,17 @@ ASK_SPAN = f"invoke_agent {SERVICE_NAME}"
 OUTPUT_RETRIES = 2
 
 
-def current_trace_id() -> str | None:
-    context = trace.get_current_span().get_span_context()
-    return format(context.trace_id, "032x") if context.is_valid else None
+@dataclass(frozen=True)
+class Agents:
+    chat: Agent[AgentDeps, str]
+    observer: Agent[AgentDeps, str]
+
+
+@dataclass(frozen=True)
+class Analysis:
+    text: str
+    steps: list[Step]
+    warnings: list[str]
 
 
 async def require_grounded(ctx: RunContext[AgentDeps], answer: str) -> str:
@@ -56,24 +75,36 @@ async def require_grounded(ctx: RunContext[AgentDeps], answer: str) -> str:
     return answer
 
 
-def build_agent(settings: AgentSettings, sources: Sources, model: Model) -> Agent[AgentDeps, str]:
-    toolset = GuardedToolset(
-        build_toolset(settings, sources),
-        timeouts={PREDICT: settings.agent_predict_timeout + settings.agent_tool_timeout},
-        default_timeout=settings.agent_tool_timeout,
-        output_chars=settings.agent_tool_output_chars,
-    )
+def build_agent(
+    settings: AgentSettings, toolset: AbstractToolset[AgentDeps], model: Model
+) -> Agent[AgentDeps, str]:
     agent = Agent(
         model,
         name=SERVICE_NAME,
         instructions=INSTRUCTIONS,
         deps_type=AgentDeps,
-        toolsets=[toolset],
+        toolsets=[
+            GuardedToolset(
+                toolset,
+                timeouts={PREDICT: settings.agent_predict_timeout + settings.agent_tool_timeout},
+                default_timeout=settings.agent_tool_timeout,
+                output_chars=settings.agent_tool_output_chars,
+            )
+        ],
         model_settings=model_settings(settings),
         retries={"tools": ARGUMENT_RETRIES, "output": OUTPUT_RETRIES},
     )
     agent.output_validator(require_grounded)
     return agent
+
+
+def build_agents(
+    settings: AgentSettings, sources: Sources, actions: ActionService, model: Model
+) -> Agents:
+    return Agents(
+        chat=build_agent(settings, build_toolset(settings, sources, actions), model),
+        observer=build_agent(settings, build_read_toolset(settings, sources), model),
+    )
 
 
 def to_messages(history: Sequence[Turn], redactor: Redactor) -> list[ModelMessage]:
@@ -91,7 +122,11 @@ def to_messages(history: Sequence[Turn], redactor: Redactor) -> list[ModelMessag
 class AgentService:
     settings: AgentSettings
     redactor: Redactor
-    agent: Agent[AgentDeps, str] | None
+    agents: Agents | None
+
+    @property
+    def configured(self) -> bool:
+        return self.agents is not None
 
     async def ask(self, request: AskRequest) -> AskResponse:
         started = time.perf_counter()
@@ -124,26 +159,53 @@ class AgentService:
                     extra={"result": result, "duration_s": round(duration, 3)},
                 )
 
+    async def analyze(self, question: str) -> Analysis:
+        if self.agents is None:
+            raise LLMNotConfigured
+        deps = AgentDeps(redactor=self.redactor)
+        deps.evidence.allow(question)
+        status, answer = await self._run(
+            self.agents.observer,
+            question,
+            deps=deps,
+            usage=RunUsage(),
+            steps=self.settings.agent_incident_step_budget,
+            timeout_s=self.settings.agent_incident_timeout,
+        )
+        warnings = _warnings(deps, answer)
+        if status is AnswerStatus.step_limit:
+            warnings.append(STEP_LIMIT_ANSWER)
+        return Analysis(self.redactor.text(answer), deps.steps, warnings)
+
     async def _answer(self, request: AskRequest, span: Span) -> AskResponse:
-        if self.agent is None:
+        if self.agents is None:
             raise LLMNotConfigured
         question = self.redactor.text(request.question)
         deps = AgentDeps(redactor=self.redactor)
         for text in (question, *(turn.content for turn in request.history)):
             deps.evidence.allow(text)
         usage = RunUsage()
-        status, answer = await self._run(self.agent, question, request.history, deps, usage)
+        status, answer = await self._run(
+            self.agents.chat,
+            question if request.image is None else [question, _binary(request.image.image)],
+            request.history,
+            deps=deps,
+            usage=usage,
+            steps=self.settings.agent_step_budget,
+            timeout_s=self.settings.agent_question_timeout,
+        )
         span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
         span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
         span.set_attribute("agent.llm.requests", usage.requests)
         span.set_attribute("agent.tool.call_count", len(deps.steps))
-        warnings = [UNGROUNDED_WARNING] if deps.evidence.ungrounded(answer) else []
+        span.set_attribute("agent.question.image", request.image is not None)
         return AskResponse(
             answer=self.redactor.text(answer),
             status=status,
             steps=deps.steps,
             predictions=deps.evidence.predictions,
-            warnings=warnings,
+            actions=deps.actions,
+            warnings=_warnings(deps, answer),
             usage=Usage(
                 llm_requests=usage.requests,
                 input_tokens=usage.input_tokens,
@@ -157,22 +219,25 @@ class AgentService:
     async def _run(
         self,
         agent: Agent[AgentDeps, str],
-        question: str,
-        history: Sequence[Turn],
+        prompt: str | list[UserContent],
+        history: Sequence[Turn] = (),
+        *,
         deps: AgentDeps,
         usage: RunUsage,
+        steps: int,
+        timeout_s: float,
     ) -> tuple[AnswerStatus, str]:
         try:
             run = await agent.run(
-                question,
+                prompt,
                 message_history=to_messages(history, self.redactor),
                 deps=deps,
                 usage=usage,
                 usage_limits=UsageLimits(
-                    request_limit=self.settings.agent_step_budget,
+                    request_limit=steps,
                     tool_calls_limit=self.settings.agent_tool_call_budget,
                 ),
-                timeout=self.settings.agent_question_timeout,
+                timeout=timeout_s,
             )
         except UsageLimitExceeded:
             return AnswerStatus.step_limit, STEP_LIMIT_ANSWER
@@ -185,3 +250,11 @@ class AgentService:
             )
             raise LLMFailed from None
         return AnswerStatus.ok, run.output
+
+
+def _warnings(deps: AgentDeps, answer: str) -> list[str]:
+    return [UNGROUNDED_WARNING] if deps.evidence.ungrounded(answer) else []
+
+
+def _binary(image: Image) -> BinaryContent:
+    return BinaryContent(image.data, media_type=image.media_type)
