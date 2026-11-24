@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 MAX_SPANS = 60
@@ -128,6 +129,7 @@ def tree(trace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     ordered = _ordered(spans)
     return {
         "trace_id": trace_id,
+        "started_at": datetime.fromtimestamp(origin / 1e9, UTC).isoformat(timespec="seconds"),
         "total_ms": round((max(span.end_ns for span in spans) - origin) / 1e6, 1),
         "span_count": len(spans),
         "error_count": sum(span.error is not None for span in spans),

@@ -1,11 +1,12 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from dota_winprob.agent import queries, spans
 from dota_winprob.agent.envelope import ToolResult
-from dota_winprob.agent.errors import ToolInputError
+from dota_winprob.agent.errors import SourceUnavailable, ToolInputError
 from dota_winprob.agent.sources.loki import Loki, grouped
 from dota_winprob.agent.sources.tasks_db import TasksReader
 from dota_winprob.agent.sources.tempo import Tempo
@@ -15,6 +16,11 @@ SCAN_LINES = 300
 NO_FAILED = (
     "статус failed не записывается, если сбой был в самом Postgres: проверь dlq_ready в pipeline_status "
     "и search_logs service=dota-worker level=WARNING"
+)
+
+REPUBLISHED = (
+    "задачу публиковали несколько раз: показан трейс, после которого записан результат, остальные — в "
+    "other_trace_ids"
 )
 
 LogService = Literal[
@@ -109,19 +115,36 @@ class IncidentTools:
         ] = None,
         task_id: TaskId | None = None,
     ) -> ToolResult:
+        others: list[str] = []
         if trace_id is not None:
-            found = [queries.trace_id(trace_id)]
+            chosen = queries.trace_id(trace_id)
         elif task_id is not None:
-            found = await self.tempo.find_by_task(queries.task_id(task_id))
+            chosen, *others = await self._traces_of(queries.task_id(task_id)) or [None]
         else:
             raise ToolInputError("нужен trace_id или task_id")
-        payload = await self.tempo.fetch(found[0]) if found else None
+        payload = await self.tempo.fetch(chosen) if chosen else None
         if payload is None:
             return ToolResult("tempo", {"found": False}, "трейс не найден", "empty")
-        data = spans.tree(found[0], payload)
-        if len(found) > 1:
-            data["other_trace_ids"] = found[1:]
+        data = spans.tree(chosen, payload)
+        if others:
+            data = {"note": REPUBLISHED, **data, "other_trace_ids": others}
         if not data["spans"]:
             return ToolResult("tempo", data, "трейс пуст", "empty")
         summary = f"спанов {data['span_count']}, ошибок {data['error_count']}, всего {data['total_ms']} мс"
         return ToolResult("tempo", data, summary)
+
+    async def _traces_of(self, task_id: str) -> list[str]:
+        found = await self.tempo.find_by_task(task_id)
+        if len(found) > 1:
+            completed = await self._completed_at(task_id)
+            if completed is not None:
+                completed_ns = completed.timestamp() * 1e9
+                found.sort(key=lambda trace: trace.started_ns > completed_ns)
+        return [trace.trace_id for trace in found]
+
+    async def _completed_at(self, task_id: str) -> datetime | None:
+        try:
+            row = await self.tasks.task(task_id)
+        except SourceUnavailable:
+            return None
+        return row["completed_at"] if row else None

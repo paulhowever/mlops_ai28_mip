@@ -300,6 +300,43 @@ async def test_get_trace_by_task_builds_tree(run_tool, backends):
     assert search.url.params["q"] == '{ span.task.id = "batch:566" }'
 
 
+@pytest.mark.parametrize(
+    ("completed_s", "expected"), [(150, "first"), (250, "second"), (None, "second"), (50, "second")]
+)
+async def test_get_trace_prefers_processing_that_wrote_result(
+    run_tool, backends, pool, completed_s, expected
+):
+    ids = {"first": "ab" * 16, "second": "cd" * 16}
+    backends.found_traces = [
+        {"traceID": ids["first"], "startTimeUnixNano": str(100 * 10**9)},
+        {"traceID": ids["second"], "startTimeUnixNano": str(200 * 10**9)},
+    ]
+    backends.traces = dict.fromkeys(ids.values(), trace_payload())
+    completed = None if completed_s is None else datetime.fromtimestamp(completed_s, UTC)
+    pool.rows = [task_row(completed_at=completed)]
+
+    data, _, _ = await run_tool("get_trace", task_id="batch:566")
+
+    assert data["trace_id"] == ids.pop(expected)
+    assert data["other_trace_ids"] == list(ids.values())
+    assert data["started_at"] == "1970-01-01T00:00:01+00:00"
+    assert "несколько раз" in data["note"]
+
+
+async def test_get_trace_survives_database_down(run_tool, backends, pool):
+    backends.found_traces = [
+        {"traceID": "ab" * 16, "startTimeUnixNano": "1"},
+        {"traceID": "cd" * 16, "startTimeUnixNano": "2"},
+    ]
+    backends.traces = {"cd" * 16: trace_payload()}
+    pool.error = OSError("connection refused")
+
+    data, step, _ = await run_tool("get_trace", task_id="batch:566")
+
+    assert step.status == "ok"
+    assert data["trace_id"] == "cd" * 16
+
+
 @pytest.mark.parametrize("wrap", [lambda body: body, lambda body: {"trace": body}])
 async def test_get_trace_reads_both_tempo_formats(run_tool, backends, wrap):
     backends.traces = {"ab" * 16: wrap(trace_payload("resourceSpans"))}

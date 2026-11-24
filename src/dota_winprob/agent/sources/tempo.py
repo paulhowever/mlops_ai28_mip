@@ -1,5 +1,6 @@
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from dota_winprob.agent import queries
@@ -10,11 +11,17 @@ LOOKBACK_S = 48 * 3600
 JSON_ONLY = {"Accept": "application/json"}
 
 
+@dataclass(frozen=True)
+class FoundTrace:
+    trace_id: str
+    started_ns: int
+
+
 class Tempo(HTTPSource):
     ready_path = "/ready"
     clock: Callable[[], float] = staticmethod(time.time)
 
-    async def find_by_task(self, task_id: str) -> list[str]:
+    async def find_by_task(self, task_id: str) -> list[FoundTrace]:
         end = int(self.clock())
         body = await self.json(
             "GET",
@@ -26,9 +33,11 @@ class Tempo(HTTPSource):
                 "end": end,
             },
         )
-        found = body.get("traces") or []
-        found.sort(key=lambda trace: int(trace.get("startTimeUnixNano", 0)), reverse=True)
-        return [queries.trace_id(trace["traceID"]) for trace in found]
+        found = [
+            FoundTrace(queries.trace_id(trace["traceID"]), int(trace.get("startTimeUnixNano", 0)))
+            for trace in body.get("traces") or []
+        ]
+        return sorted(found, key=lambda trace: trace.started_ns, reverse=True)
 
     async def fetch(self, trace_id: str) -> dict[str, Any] | None:
         path = f"/api/traces/{queries.trace_id(trace_id)}"
