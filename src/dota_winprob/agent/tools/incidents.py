@@ -1,0 +1,112 @@
+from dataclasses import dataclass
+from typing import Annotated, Literal
+
+from pydantic import Field
+
+from dota_winprob.agent import queries, spans
+from dota_winprob.agent.envelope import ToolResult
+from dota_winprob.agent.errors import ToolInputError
+from dota_winprob.agent.sources.loki import Loki
+from dota_winprob.agent.sources.tasks_db import TasksReader
+from dota_winprob.agent.sources.tempo import Tempo
+from dota_winprob.agent.tools.monitoring import Minutes
+
+LogService = Literal[
+    "dota-api",
+    "dota-worker",
+    "dota-source",
+    "dota-agent",
+    "rabbitmq",
+    "postgres",
+    "mlflow",
+    "minio",
+    "grafana",
+    "prometheus",
+    "loki",
+    "tempo",
+    "alloy",
+    "otel-collector",
+]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+TaskId = Annotated[
+    str, Field(max_length=200, description="Идентификатор задачи, например batch:566.")
+]
+Limit = Annotated[int, Field(ge=1, le=50, description="Сколько записей вернуть.")]
+
+
+@dataclass(frozen=True)
+class IncidentTools:
+    loki: Loki
+    tempo: Tempo
+    tasks: TasksReader
+
+    async def search_logs(
+        self,
+        service: Annotated[
+            LogService | None, Field(description="Сервис. Без него — все сервисы.")
+        ] = None,
+        level: Annotated[
+            LogLevel | None,
+            Field(description="Минимальный уровень: ERROR вернёт и CRITICAL."),
+        ] = None,
+        task_id: TaskId | None = None,
+        text: Annotated[
+            str | None,
+            Field(
+                max_length=1000,
+                description="Подстрока в строке лога без учёта регистра, обычный текст, не regex.",
+            ),
+        ] = None,
+        minutes: Minutes = 15,
+        limit: Limit = 20,
+    ) -> ToolResult:
+        query = queries.logql(service, level, task_id, text)
+        entries = await self.loki.search(query, minutes, limit)
+        data = {"minutes": minutes, "order": "сначала новые", "entries": entries}
+        if not entries:
+            return ToolResult("loki", data, f"за {minutes} мин записей нет", "empty")
+        return ToolResult("loki", data, f"записей: {len(entries)} за {minutes} мин")
+
+    async def get_task(self, task_id: TaskId) -> ToolResult:
+        task_id = queries.task_id(task_id)
+        row = await self.tasks.task(task_id)
+        if row is None:
+            return ToolResult(
+                "postgres",
+                {"task_id": task_id, "found": False},
+                f"задачи {task_id} нет в таблице tasks",
+                "empty",
+            )
+        return ToolResult("postgres", row, f"{task_id}: {row['status']}, попыток {row['attempts']}")
+
+    async def failed_tasks(self, limit: Limit = 10) -> ToolResult:
+        rows = await self.tasks.failed(limit)
+        totals = await self.tasks.totals()
+        data = {"totals_by_status": totals, "order": "сначала новые", "tasks": rows}
+        if not rows:
+            return ToolResult("postgres", data, "задач failed нет", "empty")
+        return ToolResult("postgres", data, f"failed всего {totals.get('failed', len(rows))}")
+
+    async def get_trace(
+        self,
+        trace_id: Annotated[
+            str | None, Field(max_length=200, description="trace_id, 32 шестнадцатеричных символа.")
+        ] = None,
+        task_id: TaskId | None = None,
+    ) -> ToolResult:
+        if trace_id is not None:
+            found = [queries.trace_id(trace_id)]
+        elif task_id is not None:
+            found = await self.tempo.find_by_task(queries.task_id(task_id))
+        else:
+            raise ToolInputError("нужен trace_id или task_id")
+        payload = await self.tempo.fetch(found[0]) if found else None
+        if payload is None:
+            return ToolResult("tempo", {"found": False}, "трейс не найден", "empty")
+        data = spans.tree(found[0], payload)
+        if len(found) > 1:
+            data["other_trace_ids"] = found[1:]
+        if not data["spans"]:
+            return ToolResult("tempo", data, "трейс пуст", "empty")
+        summary = f"спанов {data['span_count']}, ошибок {data['error_count']}, всего {data['total_ms']} мс"
+        return ToolResult("tempo", data, summary)
