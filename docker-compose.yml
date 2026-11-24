@@ -39,7 +39,7 @@ x-otel-env: &otel-env
 services:
   app:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     restart: unless-stopped
     command:
       - sh
@@ -79,7 +79,7 @@ services:
 
   worker:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     command:
       - sh
       - -c
@@ -125,7 +125,7 @@ services:
 
   source:
     build: *app-build
-    image: dota-winprob:local
+    image: ${APP_IMAGE:-dota-winprob:local}
     profiles: ["batch"]
     command:
       - sh
@@ -150,6 +150,95 @@ services:
         limits:
           cpus: "1.0"
           memory: 256M
+    logging: *logging
+
+  agent-db:
+    image: postgres:16-alpine
+    profiles: ["agent"]
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - psql -q -v ON_ERROR_STOP=1 -v password="$$AGENT_DB_PASSWORD" -f /agent-role.sql
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGDATABASE: ${POSTGRES_DB:-dota_winprob}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD:-dota_agent}
+    volumes:
+      - ./docker/agent-role.sql:/agent-role.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    mem_limit: 64m
+    logging: *logging
+
+  agent:
+    build: *app-build
+    image: ${APP_IMAGE:-dota-winprob:local}
+    profiles: ["agent"]
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - export OTEL_RESOURCE_ATTRIBUTES="$$OTEL_RESOURCE_ATTRIBUTES,service.instance.id=$$(hostname)"; exec uvicorn dota_winprob.agent.app:app --host 0.0.0.0 --port 8010 --timeout-graceful-shutdown 5 --no-access-log --no-server-header
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: dota-agent
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HEALTH_PROBE_TIMEOUT: ${HEALTH_PROBE_TIMEOUT:-3.0}
+      GRACEFUL_TIMEOUT: ${AGENT_GRACEFUL_TIMEOUT:-10}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://ftii.llm.actcognitive.org/v1}
+      LLM_MODEL: ${LLM_MODEL:-bonsai2-27b}
+      LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-2}
+      LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-20}
+      LLM_TOKENS_PER_MINUTE: ${LLM_TOKENS_PER_MINUTE:-100000}
+      AGENT_API_URL: http://app:8000
+      AGENT_PROMETHEUS_URL: http://prometheus:9090
+      AGENT_LOKI_URL: http://loki:3100
+      AGENT_TEMPO_URL: http://tempo:3200
+      AGENT_TASKS_FILE: /app/data/tasks.csv
+      AGENT_DATABASE_URL: postgresql://dota_agent:${AGENT_DB_PASSWORD:-dota_agent}@postgres:5432/${POSTGRES_DB:-dota_winprob}
+      AGENT_ALERTS_TOKEN: ${AGENT_ALERTS_TOKEN:-local-alerts}
+      AGENT_ALLOWED_HOSTS: ${AGENT_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}
+      AGENT_GRAFANA_URL: ${AGENT_GRAFANA_URL:-http://localhost:${GRAFANA_PORT:-3000}}
+      AGENT_ACTION_TTL: ${AGENT_ACTION_TTL:-300}
+      AGENT_INCIDENT_COOLDOWN: ${AGENT_INCIDENT_COOLDOWN:-600}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-dota}:${RABBITMQ_PASSWORD:-dota}@rabbitmq:5672/
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: ${MODEL_NAME:-dota-winprob}
+      MODEL_ALIAS: ${MODEL_ALIAS:-champion}
+    ports:
+      - "127.0.0.1:${AGENT_PORT:-8010}:8010"
+    volumes:
+      - ./data:/app/data:ro
+    stop_grace_period: 20s
+    depends_on:
+      agent-db:
+        condition: service_completed_successfully
+    networks:
+      - backend
+      - observability
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8010/healthz', timeout=3).status == 200 else 1)
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    mem_limit: 384m
     logging: *logging
 
   rabbitmq:

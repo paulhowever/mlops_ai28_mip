@@ -1,0 +1,15 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: agent
+    receivers:
+      - uid: agent-webhook
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: $AGENT_ALERTS_URL
+          httpMethod: POST
+          maxAlerts: 50
+          authorization_scheme: Bearer
+          authorization_credentials: $AGENT_ALERTS_TOKEN

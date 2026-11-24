@@ -1,0 +1,518 @@
+{
+ "started_at": "2026-11-24T11:12:23+00:00",
+ "model": "bonsai2-27b",
+ "minutes_window": 65,
+ "image": {
+  "width": 1100,
+  "height": 800,
+  "bytes": 92463
+ },
+ "repeats": 2,
+ "questions": {
+  "v1": "Какой была максимальная глубина очереди tasks.score за последние 65 минут?",
+  "v2": "Какой была максимальная пропускная способность воркеров за последние 65 минут, задач в секунду?",
+  "v3": "Сколько раз за последние 65 минут очередь tasks.score держалась выше 50 сообщений дольше двух минут подряд?",
+  "v4": "Во сколько (ЧЧ:ММ, UTC) начался последний за последние 65 минут период, когда очередь tasks.score держалась выше 50 сообщений?",
+  "v5": "Каким был максимум сообщений в tasks.dlq за последние 65 минут?"
+ },
+ "expected": {
+  "v1": 101.0,
+  "v2": 37.48354949777196,
+  "v3": 3,
+  "v4": 639,
+  "v5": 28.0
+ },
+ "summary": {
+  "picture": {
+   "correct": 6,
+   "answered": 10,
+   "errors": 0,
+   "median_tokens": 1198.0,
+   "median_model_s": 1.74,
+   "median_llm_requests": 1.0,
+   "wrong": [
+    "v3#1",
+    "v3#2",
+    "v4#1",
+    "v4#2"
+   ]
+  },
+  "numbers": {
+   "correct": 7,
+   "answered": 10,
+   "errors": 0,
+   "median_tokens": 7188.5,
+   "median_model_s": 3.125,
+   "median_llm_requests": 2.0,
+   "wrong": [
+    "v3#1",
+    "v3#2",
+    "v4#1"
+   ]
+  },
+  "both": {
+   "correct": 8,
+   "answered": 9,
+   "errors": 1,
+   "median_tokens": 9313,
+   "median_model_s": 2.94,
+   "median_llm_requests": 2,
+   "wrong": [
+    "v4#1"
+   ]
+  }
+ },
+ "rows": [
+  {
+   "mode": "picture",
+   "repeat": 1,
+   "question": "v1",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная глубина очереди tasks.score за последние 65 минут достигала значения около 100 сообщений, что совпадает с красным пунктирным уровнем лимита.\nИТОГ: 100",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1149,
+   "output_tokens": 48,
+   "wall_s": 1.97,
+   "model_s": 1.96
+  },
+  {
+   "mode": "numbers",
+   "repeat": 1,
+   "question": "v1",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная глубина очереди tasks.score за последние 65 минут — 101 сообщение (metric_history, Prometheus), пик был в 10:41:55Z и повторился в 10:48:34Z.\n\nИТОГ: 101\n</think>\n\nМаксимальная глубина очереди tasks.score за последние 65 минут — 101 сообщение (metric_history, Prometheus), пик был в 10:41:55Z и повторился в 10:48:34Z.\n\nИТОГ: 101",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7028,
+   "output_tokens": 174,
+   "wall_s": 3.19,
+   "model_s": 3.14
+  },
+  {
+   "mode": "both",
+   "repeat": 1,
+   "question": "v1",
+   "error": "busy",
+   "ok": null
+  },
+  {
+   "mode": "picture",
+   "repeat": 1,
+   "question": "v2",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная пропускная способность воркеров (зеленая линия) достигла пика примерно на уровне 38–40 задач в секунду.\nИТОГ: 40",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1155,
+   "output_tokens": 43,
+   "wall_s": 61.89,
+   "model_s": 1.89
+  },
+  {
+   "mode": "numbers",
+   "repeat": 1,
+   "question": "v2",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная пропускная способность воркеров за последние 65 минут составила 37.5023 задач/с (metric_history, Prometheus), пик был в 10:45:32Z.\n\nИТОГ: 37.5023\n</think>\n\nМаксимальная пропускная способность воркеров за последние 65 минут составила 37.5023 задач/с (metric_history, Prometheus), пик был в 10:45:32Z.\n\nИТОГ: 37.5023",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7095,
+   "output_tokens": 168,
+   "wall_s": 3.14,
+   "model_s": 3.11
+  },
+  {
+   "mode": "both",
+   "repeat": 1,
+   "question": "v2",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная пропускная способность воркеров за последние 65 минут составила 37.4 задач в секунду (metric_history, Prometheus), пик был в 10:44:57 UTC.\n\nИТОГ: 37.4",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9215,
+   "output_tokens": 98,
+   "wall_s": 2.56,
+   "model_s": 2.54
+  },
+  {
+   "mode": "picture",
+   "repeat": 1,
+   "question": "v3",
+   "error": null,
+   "ok": false,
+   "answer": "За последние 65 минут график глубины очереди tasks.score демонстрирует четыре отдельных периода, когда значение стабильно превышало отметку в 50 сообщений и поддерживалось на этом уровне более двух минут подряд.\n\nИТОГ: 4",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1158,
+   "output_tokens": 54,
+   "wall_s": 2.15,
+   "model_s": 2.14
+  },
+  {
+   "mode": "numbers",
+   "repeat": 1,
+   "question": "v3",
+   "error": null,
+   "ok": false,
+   "answer": "По данным Prometheus (metric_history, queue_ready, окно 10:05–11:10 UTC): очередь tasks.score держалась выше 50 сообщений в двух эпизодах — с 10:15 до 10:26 и с 10:32 до 10:53. Оба эпизода длиннее двух минут, поэтому ответ — 2 раза.\n\nИТОГ: 2",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7047,
+   "output_tokens": 138,
+   "wall_s": 2.77,
+   "model_s": 2.74
+  },
+  {
+   "mode": "both",
+   "repeat": 1,
+   "question": "v3",
+   "error": null,
+   "ok": true,
+   "answer": "По данным Prometheus (metric_history, queue_ready, окно 10:05–11:10 UTC) очередь tasks.score держалась выше 50 сообщений в трёх эпизодах: примерно с 10:12 до 10:26, с 10:32 до 10:49 и с 10:46 до 10:53 (последний — внутри второго). Каждый из них длиннее двух минут.\n\nИТОГ: 3",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9177,
+   "output_tokens": 152,
+   "wall_s": 3.08,
+   "model_s": 3.06
+  },
+  {
+   "mode": "picture",
+   "repeat": 1,
+   "question": "v4",
+   "error": null,
+   "ok": false,
+   "answer": "Последний период, когда глубина очереди превышала 50 сообщений, начался примерно в 10:42 UTC.\nИТОГ: 10:42",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1167,
+   "output_tokens": 41,
+   "wall_s": 1.83,
+   "model_s": 1.83
+  },
+  {
+   "mode": "numbers",
+   "repeat": 1,
+   "question": "v4",
+   "error": null,
+   "ok": false,
+   "answer": "По данным Prometheus (metric_history, queue_ready) за последние 65 минут очередь tasks.score держалась выше 50 сообщений в двух периодах: примерно с 10:15 до 10:26 и с 10:32 до 10:53. Последний из них начался в 10:32 UTC (точнее, первый замер выше порога — 10:32:49Z).\n\nИТОГ: 10:32",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7063,
+   "output_tokens": 149,
+   "wall_s": 2.97,
+   "model_s": 2.94
+  },
+  {
+   "mode": "both",
+   "repeat": 1,
+   "question": "v4",
+   "error": null,
+   "ok": false,
+   "answer": "По данным Prometheus (metric_history, queue_ready) за последние 65 минут очередь tasks.score была выше 50 сообщений в трёх периодах: примерно с 10:15 до 10:26, с 10:32 до 10:49 и с 10:53 — нет, последний период выше 50 заканчивается около 10:53. Последний период, когда очередь держалась выше 50 сообщений, начался в 10:32 UTC (точнее точка 10:32:52Z со значением 85).\n\nИТОГ: 10:32",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9195,
+   "output_tokens": 184,
+   "wall_s": 3.5,
+   "model_s": 3.48
+  },
+  {
+   "mode": "picture",
+   "repeat": 1,
+   "question": "v5",
+   "error": null,
+   "ok": true,
+   "answer": "Максимум сообщений в tasks.dlq за последние 65 минут составил 28.\nИТОГ: 28",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1149,
+   "output_tokens": 29,
+   "wall_s": 1.67,
+   "model_s": 1.67
+  },
+  {
+   "mode": "numbers",
+   "repeat": 1,
+   "question": "v5",
+   "error": null,
+   "ok": true,
+   "answer": "Максимум сообщений в tasks.dlq за последние 65 минут — 28 (metric_history, Prometheus), достигнут в 10:32:19 UTC.\n\nИТОГ: 28",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7024,
+   "output_tokens": 89,
+   "wall_s": 2.4,
+   "model_s": 2.37
+  },
+  {
+   "mode": "both",
+   "repeat": 1,
+   "question": "v5",
+   "error": null,
+   "ok": true,
+   "answer": "Максимум сообщений в tasks.dlq за последние 65 минут — 28 (metric_history, Prometheus), достигнут около 10:32 UTC.\n\nИТОГ: 28",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9156,
+   "output_tokens": 86,
+   "wall_s": 2.43,
+   "model_s": 2.4
+  },
+  {
+   "mode": "picture",
+   "repeat": 2,
+   "question": "v1",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная глубина очереди tasks.score за последние 65 минут достигала значения около 100 сообщений, что совпадает с красным пунктирным уровнем лимита.\nИТОГ: 100",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1149,
+   "output_tokens": 48,
+   "wall_s": 31.04,
+   "model_s": 1.41
+  },
+  {
+   "mode": "numbers",
+   "repeat": 2,
+   "question": "v1",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная глубина очереди tasks.score за последние 65 минут составила 101 сообщение (metric_history, Prometheus), пик был в 10:18:22Z UTC.\n\nИТОГ: 101",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7026,
+   "output_tokens": 93,
+   "wall_s": 3.62,
+   "model_s": 3.11
+  },
+  {
+   "mode": "both",
+   "repeat": 2,
+   "question": "v1",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная глубина очереди tasks.score за последние 65 минут — 101 сообщение (metric_history, Prometheus), максимум был в 10:19:03Z UTC.\n\nИТОГ: 101\n</think>\n\nМаксимальная глубина очереди tasks.score за последние 65 минут составила 101 сообщение (metric_history, Prometheus). Максимум наблюдался в 10:19:03Z UTC.\n\nИТОГ: 101",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9157,
+   "output_tokens": 149,
+   "wall_s": 3.55,
+   "model_s": 3.52
+  },
+  {
+   "mode": "picture",
+   "repeat": 2,
+   "question": "v2",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная пропускная способность воркеров (зеленая линия) достигла пика примерно на уровне 38–40 задач в секунду.\nИТОГ: 40",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1155,
+   "output_tokens": 43,
+   "wall_s": 1.81,
+   "model_s": 1.81
+  },
+  {
+   "mode": "numbers",
+   "repeat": 2,
+   "question": "v2",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная пропускная способность воркеров за последние 65 минут составила 37.8287 задач/с (metric_history, Prometheus), максимум был в 10:45:44Z.\n\nИТОГ: 37.8287",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7090,
+   "output_tokens": 102,
+   "wall_s": 3.2,
+   "model_s": 3.17
+  },
+  {
+   "mode": "both",
+   "repeat": 2,
+   "question": "v2",
+   "error": null,
+   "ok": true,
+   "answer": "Максимальная пропускная способность воркеров за последние 65 минут составила 37.9 задач в секунду (metric_history, Prometheus), пик был в 10:45:28 UTC.\n\nИТОГ: 37.9",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9223,
+   "output_tokens": 98,
+   "wall_s": 2.59,
+   "model_s": 2.56
+  },
+  {
+   "mode": "picture",
+   "repeat": 2,
+   "question": "v3",
+   "error": null,
+   "ok": false,
+   "answer": "За последние 65 минут график глубины очереди tasks.score демонстрирует четыре отдельных периода, когда значение стабильно превышало отметку в 50 сообщений и поддерживалось на этом уровне значительно дольше двух минут.\n\nИТОГ: 4",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1158,
+   "output_tokens": 54,
+   "wall_s": 1.52,
+   "model_s": 1.52
+  },
+  {
+   "mode": "numbers",
+   "repeat": 2,
+   "question": "v3",
+   "error": null,
+   "ok": false,
+   "answer": "По данным Prometheus (metric_history, queue_ready, окно 65 минут): очередь tasks.score держалась выше 50 сообщений в одном непрерывном интервале — с 10:33:49Z до 10:47:26Z, это дольше двух минут. Других эпизодов подряд не видно.\n\nИТОГ: 1",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7043,
+   "output_tokens": 120,
+   "wall_s": 3.34,
+   "model_s": 3.32
+  },
+  {
+   "mode": "both",
+   "repeat": 2,
+   "question": "v3",
+   "error": null,
+   "ok": true,
+   "answer": "По данным Prometheus (metric_history, queue_ready, окно 65 минут): очередь tasks.score держалась выше 50 сообщений в трёх эпизодах — примерно с 10:13 до 10:23, с 10:30 до 10:37 и с 10:40 до 10:50. Каждый из них длиннее двух минут.\n\nИТОГ: 3",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9176,
+   "output_tokens": 137,
+   "wall_s": 2.97,
+   "model_s": 2.94
+  },
+  {
+   "mode": "picture",
+   "repeat": 2,
+   "question": "v4",
+   "error": null,
+   "ok": false,
+   "answer": "Последний период, когда глубина очереди превышала 50 сообщений, начался примерно в 10:42 UTC.\nИТОГ: 10:42",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1167,
+   "output_tokens": 41,
+   "wall_s": 1.15,
+   "model_s": 1.15
+  },
+  {
+   "mode": "numbers",
+   "repeat": 2,
+   "question": "v4",
+   "error": null,
+   "ok": true,
+   "answer": "По данным Prometheus (metric_history, queue_ready) за последние 65 минут очередь tasks.score держалась выше 50 сообщений в нескольких эпизодах: примерно с 10:13 до 10:20, с 10:30 до 10:37 и с 10:40 до 10:51. Последний такой период начался в 10:40 UTC (точка 10:40:55Z со значением 97).\n\nИТОГ: 10:40",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7063,
+   "output_tokens": 165,
+   "wall_s": 4.16,
+   "model_s": 3.74
+  },
+  {
+   "mode": "both",
+   "repeat": 2,
+   "question": "v4",
+   "error": null,
+   "ok": true,
+   "answer": "По данным Prometheus (metric_history, queue_ready) за последние 65 минут очередь tasks.score была выше 50 сообщений в трёх периодах: примерно с 10:13 до 10:23, с 10:30 до 10:37 и с 10:40 до 10:51. Последний из них начался около 10:40 UTC (точка 10:40:59Z со значением 97).\n\nИТОГ: 10:40",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9196,
+   "output_tokens": 161,
+   "wall_s": 3.29,
+   "model_s": 3.26
+  },
+  {
+   "mode": "picture",
+   "repeat": 2,
+   "question": "v5",
+   "error": null,
+   "ok": true,
+   "answer": "Максимум сообщений в tasks.dlq за последние 65 минут составил 28.\nИТОГ: 28",
+   "tools": [],
+   "llm_requests": 1,
+   "input_tokens": 1149,
+   "output_tokens": 29,
+   "wall_s": 28.72,
+   "model_s": 1.34
+  },
+  {
+   "mode": "numbers",
+   "repeat": 2,
+   "question": "v5",
+   "error": null,
+   "ok": true,
+   "answer": "Максимум сообщений в tasks.dlq за последние 65 минут — 28 (metric_history, Prometheus), достигнут в 10:32:21Z UTC.\n\nИТОГ: 28",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 7024,
+   "output_tokens": 90,
+   "wall_s": 3.91,
+   "model_s": 3.32
+  },
+  {
+   "mode": "both",
+   "repeat": 2,
+   "question": "v5",
+   "error": null,
+   "ok": true,
+   "answer": "Максимум сообщений в tasks.dlq за последние 65 минут — 28 (metric_history, Prometheus), достигнут в 10:32:24 UTC.\n\nИТОГ: 28",
+   "tools": [
+    "metric_history"
+   ],
+   "llm_requests": 2,
+   "input_tokens": 9155,
+   "output_tokens": 89,
+   "wall_s": 2.66,
+   "model_s": 2.49
+  }
+ ]
+}
